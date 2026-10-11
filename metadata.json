@@ -1,0 +1,6 @@
+{
+  "name": "Attending and Non Attending Students",
+  "description": "Comprehensive school registry and fee management dashboard for Class 11 & 12 attending and non-attending students with Excel/Sheets import-export, installment tracking, and recycle bin safeguards.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

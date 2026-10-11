@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Attending and Non Attending Students</title>
+  <meta name="description" content="Comprehensive school registry and fee management dashboard for Class 11 & 12 attending and non-attending students with Excel/Sheets import-export, installment tracking, and recycle bin safeguards." />
+  <meta property="og:title" content="Attending and Non Attending Students" />
+  <meta property="og:description" content="Comprehensive school registry and fee management dashboard for Class 11 & 12 attending and non-attending students with Excel/Sheets import-export, installment tracking, and recycle bin safeguards." />
+  <meta property="og:type" content="website" /><meta name="twitter:card" content="summary_large_image" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" /><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{fontFamily:{sans:['"Plus Jakarta Sans"','sans-serif'],mono:['"JetBrains Mono"','monospace']}}}};</script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+  <!-- Firebase SDK v10 (Compat for seamless direct client-side integration) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+  <style>
+    ::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-track{background:#f1f5f9}::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:4px}::-webkit-scrollbar-thumb:hover{background:#94a3b8}
+    .modal-backdrop{background-color:rgba(15,23,42,0.65);backdrop-filter:blur(4px)}
+    @keyframes pulse-subtle{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.6;transform:scale(0.95)}}.animate-pulse-subtle{animation:pulse-subtle 2s infinite ease-in-out}
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans min-h-screen flex flex-col antialiased selection:bg-indigo-500 selection:text-white">
+  <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none"></div>
+  <div id="app" class="flex-1 flex flex-col"></div>
+
+  <script>
+    /* =====================================================================
+       🔥 FIREBASE CONFIGURATION - PASTE YOUR CONFIDENTIALS HERE
+       Firebase Console -> Project Settings -> General -> Your apps -> Web App (</>)
+       Replace the placeholder values below with your real project credentials.
+       ===================================================================== */
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+      projectId: "YOUR_PROJECT_ID",
+      storageBucket: "YOUR_PROJECT_ID.appspot.com",
+      messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+      appId: "YOUR_APP_ID"
+    };
+    /* ============================ END FIREBASE CONFIG ============================ */
+
+    // --- Firebase Initialization & Detection ---
+    let isFirebaseConfigured = Boolean(
+      window.firebase &&
+      firebaseConfig &&
+      firebaseConfig.apiKey &&
+      firebaseConfig.apiKey !== "YOUR_API_KEY" &&
+      firebaseConfig.projectId &&
+      firebaseConfig.projectId !== "YOUR_PROJECT_ID"
+    );
+
+    let fbAuth = null;
+    let fbDb = null;
+
+    if (isFirebaseConfigured) {
+      try {
+        firebase.initializeApp(firebaseConfig);
+        fbAuth = firebase.auth();
+        fbDb = firebase.firestore();
+        try { fbDb.enablePersistence({ synchronizeTabs: true }); } catch (pe) {}
+      } catch (err) {
+        console.warn("Firebase Init failed, running in local fallback mode:", err);
+        isFirebaseConfigured = false;
+      }
+    }
+
+    // --- Persistence & Auth Services (Live Firestore + Auth with Offline Fallback) ---
+    const firebaseAuthService = {
+      async signIn(email, password) {
+        if (isFirebaseConfigured && fbAuth) {
+          const cred = await fbAuth.signInWithEmailAndPassword(email, password);
+          const user = {
+            uid: cred.user.uid,
+            email: cred.user.email,
+            displayName: cred.user.displayName || (cred.user.email ? cred.user.email.split('@')[0] : 'Administrator'),
+            role: 'Head Accountant & Registrar'
+          };
+          localStorage.setItem('attendance_auth_user_v1', JSON.stringify(user));
+          return user;
+        }
+        // Local Demo Mode Fallback
+        await new Promise(r => setTimeout(r, 150));
+        if (email && password) {
+          const user = { uid: 'admin_01', email, displayName: email.split('@')[0] || 'Rajesh Sharma', role: 'Head Accountant & Registrar' };
+          localStorage.setItem('attendance_auth_user_v1', JSON.stringify(user));
+          return user;
+        }
+        throw new Error('Please enter valid email and password');
+      },
+      async signOut() {
+        if (isFirebaseConfigured && fbAuth) {
+          try { await fbAuth.signOut(); } catch (e) {}
+        }
+        localStorage.removeItem('attendance_auth_user_v1');
+        return true;
+      },
+      getCurrentUser() {
+        if (isFirebaseConfigured && fbAuth?.currentUser) {
+          const u = fbAuth.currentUser;
+          return { uid: u.uid, email: u.email, displayName: u.displayName || u.email?.split('@')[0] || 'Administrator', role: 'Head Accountant & Registrar' };
+        }
+        const s = localStorage.getItem('attendance_auth_user_v1');
+        return s ? JSON.parse(s) : { uid: 'admin_01', email: 'accountant@apexacademy.edu', displayName: 'Rajesh Sharma', role: 'Head Accountant & Registrar' };
+      }
+    };
+    const mockFirebaseAuthService = firebaseAuthService; // alias for seamless compatibility
+
+    const firestoreService = {
+      async fetchStudents() {
+        if (isFirebaseConfigured && fbDb) {
+          try {
+            const snap = await fbDb.collection('students').get();
+            if (!snap.empty) {
+              const students = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+              localStorage.setItem('attendance_students_records_v1', JSON.stringify(students));
+              return students;
+            } else {
+              const seeds = getInitialSeedStudents();
+              const batch = fbDb.batch();
+              seeds.forEach(s => { batch.set(fbDb.collection('students').doc(s.id), s); });
+              await batch.commit();
+              localStorage.setItem('attendance_students_records_v1', JSON.stringify(seeds));
+              return seeds;
+            }
+          } catch (err) {
+            console.warn("Firestore fetch error, reading from local cache:", err);
+          }
+        }
+        const s = localStorage.getItem('attendance_students_records_v1');
+        if (s) { try { return JSON.parse(s); } catch(e){} }
+        return getInitialSeedStudents();
+      },
+
+      async saveStudents(arr) {
+        localStorage.setItem('attendance_students_records_v1', JSON.stringify(arr));
+        if (isFirebaseConfigured && fbDb) {
+          try {
+            const batch = fbDb.batch();
+            arr.forEach(s => { batch.set(fbDb.collection('students').doc(s.id), s); });
+            await batch.commit();
+          } catch (err) {
+            console.error("Firestore saveStudents error:", err);
+          }
+        }
+        return true;
+      },
+
+      async fetchRecycleBin() {
+        if (isFirebaseConfigured && fbDb) {
+          try {
+            const snap = await fbDb.collection('recycle_bin').get();
+            const items = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            localStorage.setItem('attendance_recycle_bin_v1', JSON.stringify(items));
+            return items;
+          } catch (err) {
+            console.warn("Firestore fetchRecycleBin error, reading from local cache:", err);
+          }
+        }
+        const s = localStorage.getItem('attendance_recycle_bin_v1');
+        if (s) { try { return JSON.parse(s); } catch(e){} }
+        return [];
+      },
+
+      async saveRecycleBin(arr) {
+        localStorage.setItem('attendance_recycle_bin_v1', JSON.stringify(arr));
+        if (isFirebaseConfigured && fbDb) {
+          try {
+            const snap = await fbDb.collection('recycle_bin').get();
+            const batch = fbDb.batch();
+            snap.docs.forEach(doc => {
+              if (!arr.some(item => item.id === doc.id)) batch.delete(doc.ref);
+            });
+            arr.forEach(item => { batch.set(fbDb.collection('recycle_bin').doc(item.id), item); });
+            await batch.commit();
+          } catch (err) {
+            console.error("Firestore saveRecycleBin error:", err);
+          }
+        }
+        return true;
+      }
+    };
+    const mockFirestoreService = firestoreService; // alias for seamless compatibility
+
+    // --- Student Factory & Seed Data ---
+    function mkStudent(d) {
+      const remainingDue = Math.max(0, d.fee - d.paid);
+      return {
+        id: d.id, sequenceNo: d.seq, academicYear: d.year || '2026-2027', attendance: d.att, fullName: d.name,
+        motherName: d.mother || 'Sunita Sharma', fatherName: d.father, gender: d.gender || 'Male', dob: d.dob,
+        age: d.age || calculateAge(d.dob), religion: d.religion || 'Hindu', casteCategory: d.caste || 'General',
+        nationality: 'Indian', onlyChild: d.onlyChild || 'No', speciallyAbled: d.speciallyAbled || 'No',
+        disabilityType: d.disabilityType || '', annualFamilyIncome: d.income || 600000, tenthPassingYear: d.tenthYear || '2025',
+        tenthMarksPercentage: d.tenthMarks || 88.5, tenthRollNo: d.tenthRoll || 'CBSE-2025-01', tenthBoard: d.tenthBoard || 'CBSE',
+        tenthBoardOther: '', optedClass: d.grade, optedStream: d.stream, residentialAddress: d.addr,
+        contactNumber: d.phone, whatsappNumber: d.phone, email: d.email || `${d.name.toLowerCase().replace(/[^a-z]/g, '')}@gmail.com`,
+        totalFee: d.fee, paymentPlan: d.plan || (d.inst?.length ? 'Installment Plan' : 'Full Payment'),
+        fullPaymentDetails: d.fullPay || (d.plan === 'Full Payment' ? { date: '2026-04-01', mode: 'UPI', reference: 'UPI/' + d.id } : null),
+        installments: d.inst || [], totalPaid: d.paid, remainingDue,
+        feeStatus: remainingDue === 0 ? 'Full Paid' : (d.paid > 0 ? 'Active Dues' : 'Pending'),
+        createdAt: '2026-04-05T10:00:00Z', updatedAt: '2026-08-10T12:00:00Z'
+      };
+    }
+
+    function getInitialSeedStudents() {
+      return [
+        mkStudent({ id: 'std_001', seq: '2026-11-PCM-001', att: 'Attending', name: 'Aarav Dev Sharma', father: 'Devendra Sharma', dob: '2009-08-14', grade: 'Class 11', stream: 'PCM', phone: '9811234567', addr: 'House 42, Sector 15, Rohini, New Delhi - 110085', fee: 75000, paid: 50000, inst: [{ id: 1, title: 'Installment 1', dueDate: '2026-04-10', scheduledAmount: 25000, paidAmount: 25000, status: 'Paid', mode: 'UPI' }, { id: 2, title: 'Installment 2', dueDate: '2026-08-15', scheduledAmount: 25000, paidAmount: 25000, status: 'Paid', mode: 'Bank Transfer' }, { id: 3, title: 'Installment 3', dueDate: '2026-12-10', scheduledAmount: 25000, paidAmount: 0, status: 'Unpaid', mode: 'Cash' }] }),
+        mkStudent({ id: 'std_002', seq: '2026-11-PCB-002', att: 'Non-Attending', name: 'Ananya Mehra', father: 'Vikram Mehra', gender: 'Female', dob: '2009-11-22', grade: 'Class 11', stream: 'PCB', phone: '9450123987', addr: 'A-104 Palm Grove, Lucknow - 226010', fee: 80000, paid: 80000, plan: 'Full Payment' }),
+        mkStudent({ id: 'std_003', seq: '2026-12-Commerce-001', att: 'Attending', name: 'Rohan Jayant Kulkarni', father: 'Jayant Kulkarni', dob: '2008-05-19', caste: 'OBC', tenthBoard: 'State Board', grade: 'Class 12', stream: 'Commerce', phone: '9822998877', addr: 'Sai Shraddha, Pune - 411038', fee: 65000, paid: 47500, inst: [{ id: 1, title: 'Installment 1', dueDate: '2026-04-10', scheduledAmount: 32500, paidAmount: 32500, status: 'Paid', mode: 'Cheque' }, { id: 2, title: 'Installment 2', dueDate: '2026-09-10', scheduledAmount: 32500, paidAmount: 15000, status: 'Partial', mode: 'Cash' }] }),
+        mkStudent({ id: 'std_004', seq: '2026-12-Arts-001', att: 'Attending', name: 'Fatima Zohra', father: 'Syed Tariq Ali', gender: 'Female', religion: 'Muslim', dob: '2008-09-03', grade: 'Class 12', stream: 'Arts / Humanities', phone: '9837112233', addr: '14-B Civil Lines, Aligarh - 202001', fee: 60000, paid: 60000, plan: 'Full Payment' }),
+        mkStudent({ id: 'std_005', seq: '2026-11-PCM-002', att: 'Non-Attending', name: 'Kabir Singhania', father: 'Harsh Singhania', dob: '2009-03-30', grade: 'Class 11', stream: 'PCM', phone: '9900881122', addr: 'Villa 18, Whitefield, Bengaluru - 560066', fee: 85000, paid: 0, inst: [{ id: 1, title: 'Installment 1', dueDate: '2026-04-15', scheduledAmount: 42500, paidAmount: 0, status: 'Unpaid', mode: 'Cash' }, { id: 2, title: 'Installment 2', dueDate: '2026-10-15', scheduledAmount: 42500, paidAmount: 0, status: 'Unpaid', mode: 'Cash' }] }),
+        mkStudent({ id: 'std_006', seq: '2026-12-PCB-001', att: 'Non-Attending', name: 'Ishaan Verma', father: 'Dr. Alok Verma', dob: '2008-12-05', grade: 'Class 12', stream: 'PCB', phone: '9888123456', addr: 'Model Town, Jalandhar - 144003', fee: 80000, paid: 80000, plan: 'Full Payment' }),
+        mkStudent({ id: 'std_007', seq: '2026-11-Commerce-001', att: 'Attending', name: 'Tanya Gurung', father: 'Bikram Gurung', gender: 'Female', religion: 'Buddhist', caste: 'ST', dob: '2009-06-18', grade: 'Class 11', stream: 'Commerce', phone: '9733004455', addr: 'Hill Cart Road, Darjeeling - 734101', fee: 65000, paid: 32500, inst: [{ id: 1, title: 'Installment 1', dueDate: '2026-04-10', scheduledAmount: 32500, paidAmount: 32500, status: 'Paid', mode: 'UPI' }, { id: 2, title: 'Installment 2', dueDate: '2026-10-10', scheduledAmount: 32500, paidAmount: 0, status: 'Unpaid', mode: 'Cash' }] }),
+        mkStudent({ id: 'std_008', seq: '2026-11-Arts-001', att: 'Non-Attending', name: 'Arjun Nambiar', father: 'Suresh Nambiar', dob: '2009-02-14', speciallyAbled: 'Yes', disabilityType: 'Hearing Impairment', grade: 'Class 11', stream: 'Arts / Humanities', phone: '9447118899', addr: 'Panampilly Nagar, Kochi - 682036', fee: 60000, paid: 60000, plan: 'Full Payment' })
+      ];
+    }
+
+    // --- State & Helpers ---
+    function getCurrentAcademicYear() { const n = new Date(), y = n.getFullYear(); return (n.getMonth() + 1 >= 4) ? `${y}-${y + 1}` : `${y - 1}-${y}`; }
+    function loadAcademicYears() {
+      const cur = getCurrentAcademicYear(), st = localStorage.getItem('attendance_academic_years_v1');
+      let l = ['2026-2027', '2025-2026', '2024-2025', '2027-2028'];
+      if (st) { try { const p = JSON.parse(st); if (Array.isArray(p) && p.length) l = p; } catch(e){} }
+      if (!l.includes(cur)) l.unshift(cur); return l;
+    }
+
+    const defaultAcademicYear = getCurrentAcademicYear();
+    const state = {
+      isLoggedIn: true, currentUser: mockFirebaseAuthService.getCurrentUser(), isOnline: navigator.onLine,
+      students: [], recycleBin: [], selectedIds: new Set(), recycleBinSelectedIds: new Set(), recycleBinConfirmEmpty: false,
+      academicYears: loadAcademicYears(), filters: { academicYear: defaultAcademicYear, grade: 'all', attendance: 'all', stream: 'all', search: '', feeStatus: 'all' },
+      pagination: { currentPage: 1, pageSize: 10 }, activeModal: null, editingStudentId: null, viewingStudentId: null,
+      safetyDeleteContext: null, formTab: 'demographics', importDataState: { rawRows: [], parsedRows: [], step: 'upload' }
+    };
+
+    function showToast(title, message = '', type = 'info') {
+      const c = document.getElementById('toast-container'); if (!c) return;
+      const t = document.createElement('div'), bg = type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : type === 'error' ? 'bg-rose-50 border-rose-200 text-rose-900' : type === 'warning' ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-slate-900 border-slate-800 text-white';
+      const icon = type === 'success' ? 'fa-circle-check text-emerald-500' : type === 'error' ? 'fa-circle-xmark text-rose-500' : type === 'warning' ? 'fa-triangle-exclamation text-amber-500' : 'fa-circle-info text-indigo-400';
+      t.className = `pointer-events-auto flex items-start gap-3 p-4 rounded-xl shadow-lg border text-sm transition-all duration-300 transform translate-y-2 opacity-0 ${bg}`;
+      t.innerHTML = `<i class="fa-solid ${icon} text-lg mt-0.5"></i><div class="flex-1"><p class="font-semibold">${escapeHtml(title)}</p>${message ? `<p class="text-xs opacity-90 mt-0.5">${escapeHtml(message)}</p>` : ''}</div><button onclick="this.parentElement.remove()" class="text-xs opacity-60 hover:opacity-100 transition-opacity ml-2"><i class="fa-solid fa-xmark"></i></button>`;
+      c.appendChild(t); requestAnimationFrame(() => t.classList.remove('translate-y-2', 'opacity-0'));
+      setTimeout(() => { t.classList.add('opacity-0', 'translate-y-2'); setTimeout(() => t.remove(), 300); }, 4000);
+    }
+
+    function escapeHtml(s) { return s ? String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;') : ''; }
+    function formatCurrency(n) { return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(Number(n) || 0); }
+    function formatDate(d) { if (!d) return '—'; const dt = new Date(d); return isNaN(dt) ? d : dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }); }
+    function calculateAge(d) { if (!d) return 0; const dt = new Date(d); return isNaN(dt) ? 0 : Math.abs(new Date(Date.now() - dt.getTime()).getUTCFullYear() - 1970); }
+
+    function generateNextSequenceNo(year, grade, stream) {
+      const y = (year || state.filters.academicYear || defaultAcademicYear).split('-')[0], g = (grade || 'Class 11').replace('Class ', '').trim();
+      const s = (stream || '').includes('PCB') ? 'PCB' : (stream || '').includes('Commerce') ? 'Commerce' : (stream || '').includes('Arts') ? 'Arts' : 'PCM';
+      const prefix = `${y}-${g}-${s}`; return `${prefix}-${(state.students.filter(st => st.sequenceNo?.startsWith(prefix)).length + 1).toString().padStart(3, '0')}`;
+    }
+
+    function normalizeStream(v) {
+      const s = String(v || '').trim().toLowerCase();
+      return /pcb|bio|medical/i.test(s) ? 'PCB' : /pcm|math/i.test(s) ? 'PCM' : /comm|account|bus/i.test(s) ? 'Commerce' : /art|human/i.test(s) ? 'Arts / Humanities' : 'PCM';
+    }
+    function normalizeAttendance(v) { return /non-attending|non attending|dummy|external|coaching|no|0/i.test(String(v || '').trim()) ? 'Non-Attending' : 'Attending'; }
+    function normalizeDate(v) {
+      if (!v) return '2009-01-01';
+      if (typeof v === 'number' || (!isNaN(v) && !String(v).includes('-') && !String(v).includes('/'))) {
+        const s = Number(v); if (s > 10000 && s < 60000) return new Date(Math.round((s - 25569) * 86400 * 1000)).toISOString().split('T')[0];
+      }
+      const str = String(v).trim();
+      if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(str)) { const p = str.split('-'); return `${p[0]}-${p[1].padStart(2, '0')}-${p[2].padStart(2, '0')}`; }
+      if (/^\d{1,2}[-\/]\d{1,2}[-\/]\d{4}$/.test(str)) { const p = str.split(/[-\/]/); return `${p[2]}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}`; }
+      const d = new Date(str); return !isNaN(d) ? d.toISOString().split('T')[0] : '2009-01-01';
+    }
+
+    function getFilteredStudents() {
+      const { academicYear, grade, attendance, stream, search, feeStatus } = state.filters, q = search.trim().toLowerCase();
+      return state.students.filter(s => {
+        if (academicYear && academicYear !== 'all' && s.academicYear !== academicYear) return false;
+        if (grade !== 'all' && (s.optedClass.includes('11') ? '11' : '12') !== grade) return false;
+        if (attendance !== 'all' && s.attendance !== attendance) return false;
+        if (stream !== 'all' && !s.optedStream.includes(stream)) return false;
+        if (feeStatus !== 'all' && s.feeStatus !== feeStatus) return false;
+        if (q && ![s.sequenceNo, s.fullName, s.contactNumber, s.fatherName].some(f => (f || '').toLowerCase().includes(q))) return false;
+        return true;
+      });
+    }
+
+    // --- Exports ---
+    function exportToExcel(records, prefix = 'Students_Registry') {
+      if (!window.XLSX) return showToast('SheetJS Missing', 'Excel library not loaded.', 'error');
+      const rows = records.map((s, i) => ({ 'S.No': i + 1, 'Sequence ID': s.sequenceNo, 'Academic Year': s.academicYear, 'Attendance': s.attendance, 'Student Name': s.fullName, 'Father Name': s.fatherName, 'Mother Name': s.motherName, 'Gender': s.gender, 'DOB': s.dob, 'Age': s.age, 'Class': s.optedClass, 'Stream': s.optedStream, 'Contact': s.contactNumber, 'Email': s.email, 'Address': s.residentialAddress, 'Category': s.casteCategory, 'Total Fee': s.totalFee, 'Paid': s.totalPaid, 'Due': s.remainingDue, 'Status': s.feeStatus }));
+      const ws = XLSX.utils.json_to_sheet(rows); ws['!cols'] = Object.keys(rows[0] || {}).map(k => ({ wch: Math.max(k.length, 12) }));
+      const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Students');
+      XLSX.writeFile(wb, `${prefix}_${state.filters.academicYear}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      showToast('Export Completed', `Exported ${records.length} records to Excel.`, 'success');
+    }
+
+    function exportToCSV(records, prefix = 'Students_Data') {
+      if (!window.XLSX) return;
+      const rows = records.map(s => ({ 'Sequence ID': s.sequenceNo, 'Attendance': s.attendance, 'Name': s.fullName, 'Father Name': s.fatherName, 'Class': s.optedClass, 'Stream': s.optedStream, 'Contact': s.contactNumber, 'DOB': s.dob, 'Total Fee': s.totalFee, 'Paid': s.totalPaid, 'Due': s.remainingDue, 'Status': s.feeStatus }));
+      const csv = XLSX.utils.sheet_to_csv(XLSX.utils.json_to_sheet(rows));
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+      a.download = `${prefix}_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+      showToast('CSV Exported', 'CSV file generated successfully for Google Sheets.', 'success');
+    }
+
+    function downloadSampleExcelTemplate() {
+      if (!window.XLSX) return;
+      const sample = [
+        { 'Full Name': 'Kabir Rao', 'Father Name': 'Vikram Rao', 'Attendance': 'Attending', 'Class': 'Class 11', 'Stream': 'PCM', 'Date of Birth': '2009-05-14', 'Gender': 'Male', 'Contact Number': '9876543210', 'Total Course Fee': 75000, 'Paid Amount': 25000 },
+        { 'Full Name': 'Sanya Kapoor', 'Father Name': 'Ramesh Kapoor', 'Attendance': 'Non-Attending', 'Class': 'Class 12', 'Stream': 'PCB', 'Date of Birth': '2008-08-12', 'Gender': 'Female', 'Contact Number': '9812345678', 'Total Course Fee': 80000, 'Paid Amount': 80000 },
+        { 'Full Name': 'Devansh Agarwal', 'Father Name': 'Nitin Agarwal', 'Attendance': 'Attending', 'Class': 'Class 11', 'Stream': 'Commerce', 'Date of Birth': '2009-10-25', 'Gender': 'Male', 'Contact Number': '9822334455', 'Total Course Fee': 65000, 'Paid Amount': 32500 }
+      ];
+      const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sample), 'Template');
+      XLSX.writeFile(wb, 'Student_Admission_Sample_Template.xlsx');
+      showToast('Template Downloaded', 'Use this format to bulk import students.', 'success');
+    }
+
+    // --- Deletions & Selection Helpers ---
+    function selectAllFilteredStudents() {
+      const f = getFilteredStudents(); f.forEach(s => state.selectedIds.add(s.id));
+      render(); showToast('Selected All', `All ${f.length} students selected.`, 'info');
+    }
+    function deselectAllStudents() { state.selectedIds.clear(); render(); }
+    function triggerDeleteStudent(id) { const s = state.students.find(st => st.id === id); if (s) { state.safetyDeleteContext = { ids: [id], studentNames: [s.fullName] }; state.activeModal = 'safetyDelete'; render(); } }
+    function triggerDeleteSelected() {
+      if (!state.selectedIds.size) return showToast('No Students Selected', 'Please check at least one checkbox.', 'warning');
+      const ids = Array.from(state.selectedIds);
+      state.safetyDeleteContext = { ids, studentNames: state.students.filter(s => ids.includes(s.id)).map(s => s.fullName) };
+      state.activeModal = 'safetyDelete'; render();
+    }
+
+    async function executeSoftDelete() {
+      const ctx = state.safetyDeleteContext; if (!ctx?.ids.length) return;
+      const set = new Set(ctx.ids), deleted = state.students.filter(s => set.has(s.id)), now = new Date().toISOString();
+      state.students = state.students.filter(s => !set.has(s.id));
+      state.recycleBin = [...deleted.map(s => ({ ...s, deletedAt: now, deletedBy: state.currentUser.displayName || 'Administrator' })), ...state.recycleBin];
+      state.selectedIds.clear(); state.activeModal = null; state.safetyDeleteContext = null;
+      await mockFirestoreService.saveStudents(state.students); await mockFirestoreService.saveRecycleBin(state.recycleBin);
+      showToast('Moved to Recycle Bin', `${deleted.length} record(s) moved to Recycle Bin.`, 'warning'); render();
+    }
+
+    async function executeHardDelete() {
+      const ctx = state.safetyDeleteContext; if (!ctx?.ids.length) return;
+      const set = new Set(ctx.ids), count = ctx.ids.length;
+      state.students = state.students.filter(s => !set.has(s.id));
+      state.selectedIds.clear(); state.activeModal = null; state.safetyDeleteContext = null;
+      await mockFirestoreService.saveStudents(state.students);
+      showToast('Permanently Purged', `${count} student(s) permanently deleted.`, 'error'); render();
+    }
+
+    async function restoreFromRecycleBin(id) {
+      const item = state.recycleBin.find(s => s.id === id); if (!item) return;
+      state.recycleBin = state.recycleBin.filter(s => s.id !== id);
+      const clean = { ...item }; delete clean.deletedAt; delete clean.deletedBy;
+      state.students.unshift(clean);
+      await mockFirestoreService.saveStudents(state.students); await mockFirestoreService.saveRecycleBin(state.recycleBin);
+      showToast('Record Restored', `${item.fullName} restored to active registry.`, 'success'); render();
+    }
+
+    function toggleSelectRecycleItem(id) { state.recycleBinSelectedIds.has(id) ? state.recycleBinSelectedIds.delete(id) : state.recycleBinSelectedIds.add(id); render(); }
+    function toggleSelectAllRecycleItems(c) { c ? state.recycleBin.forEach(i => state.recycleBinSelectedIds.add(i.id)) : state.recycleBinSelectedIds.clear(); render(); }
+
+    async function restoreSelectedRecycleBin() {
+      if (!state.recycleBinSelectedIds.size) return;
+      const toR = state.recycleBin.filter(i => state.recycleBinSelectedIds.has(i.id));
+      state.recycleBin = state.recycleBin.filter(i => !state.recycleBinSelectedIds.has(i.id));
+      state.students = [...toR.map(i => { const c = { ...i }; delete c.deletedAt; delete c.deletedBy; return c; }), ...state.students];
+      state.recycleBinSelectedIds.clear();
+      await mockFirestoreService.saveStudents(state.students); await mockFirestoreService.saveRecycleBin(state.recycleBin);
+      showToast('Records Recovered', `${toR.length} student record(s) restored.`, 'success'); render();
+    }
+
+    async function purgeSelectedRecycleBin() {
+      if (!state.recycleBinSelectedIds.size) return;
+      const count = state.recycleBinSelectedIds.size;
+      state.recycleBin = state.recycleBin.filter(i => !state.recycleBinSelectedIds.has(i.id));
+      state.recycleBinSelectedIds.clear(); await mockFirestoreService.saveRecycleBin(state.recycleBin);
+      showToast('Permanently Purged', `${count} selected record(s) deleted permanently.`, 'error'); render();
+    }
+
+    async function restoreAllRecycleBin() {
+      if (!state.recycleBin.length) return;
+      const count = state.recycleBin.length;
+      state.students = [...state.recycleBin.map(i => { const c = { ...i }; delete c.deletedAt; delete c.deletedBy; return c; }), ...state.students];
+      state.recycleBin = []; state.recycleBinSelectedIds.clear(); state.recycleBinConfirmEmpty = false;
+      await mockFirestoreService.saveStudents(state.students); await mockFirestoreService.saveRecycleBin(state.recycleBin);
+      showToast('All Records Restored', `${count} student(s) restored to active registry.`, 'success'); render();
+    }
+
+    async function purgeItemFromRecycleBin(id) {
+      const item = state.recycleBin.find(s => s.id === id); if (!item) return;
+      state.recycleBin = state.recycleBin.filter(s => s.id !== id); state.recycleBinSelectedIds.delete(id);
+      await mockFirestoreService.saveRecycleBin(state.recycleBin);
+      showToast('Purged Permanently', `${item.fullName} deleted from Recycle Bin.`, 'error'); render();
+    }
+
+    function triggerDeleteAllBinModal() { if (!state.recycleBin.length) return showToast('Bin Already Empty', 'No student records in the Recycle Bin.', 'info'); state.recycleBinConfirmEmpty = true; render(); }
+    async function confirmEmptyRecycleBinNow() {
+      if (!state.recycleBin.length) { state.recycleBinConfirmEmpty = false; render(); return; }
+      const count = state.recycleBin.length; state.recycleBin = []; state.recycleBinSelectedIds.clear(); state.recycleBinConfirmEmpty = false;
+      await mockFirestoreService.saveRecycleBin([]); showToast('Recycle Bin Cleared', `All ${count} student record(s) permanently deleted.`, 'error'); render();
+    }
+
+    function handleSessionChange(v) { if (v === '__ADD_CUSTOM__') { state.activeModal = 'customSessionModal'; render(); } else { state.filters.academicYear = v; state.pagination.currentPage = 1; render(); } }
+    function saveCustomAcademicYear(yearStr) {
+      const c = (yearStr || '').trim();
+      if (!c) return showToast('Required', 'Please enter an academic year.', 'warning');
+      if (!/^\d{4}-\d{4}$/.test(c)) return showToast('Invalid Format', 'Use format YYYY-YYYY (e.g. 2027-2028)', 'error');
+      if (!state.academicYears.includes(c)) { state.academicYears.unshift(c); localStorage.setItem('attendance_academic_years_v1', JSON.stringify(state.academicYears)); }
+      state.filters.academicYear = c; state.activeModal = null; state.pagination.currentPage = 1;
+      showToast('Academic Year Added', `Session ${c} is now active.`, 'success'); render();
+    }
+
+    function openAddStudentModal() { state.editingStudentId = null; state.formTab = 'demographics'; state.activeModal = 'studentForm'; render(); }
+    function openEditStudentModal(id) { state.editingStudentId = id; state.formTab = 'demographics'; state.activeModal = 'studentForm'; render(); }
+    function openProfileViewModal(id) { state.viewingStudentId = id; state.activeModal = 'profileView'; render(); }
+    function openExcelPreviewModal(id) { state.viewingStudentId = id; state.activeModal = 'excelPreview'; render(); }
+
+    window.addEventListener('online', () => { state.isOnline = true; showToast('Online Reconnected', 'Connected to server.', 'success'); render(); });
+    window.addEventListener('offline', () => { state.isOnline = false; showToast('Offline Mode', 'Network disconnected. Saving changes locally.', 'warning'); render(); });
+    window.addEventListener('keydown', e => {
+      if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) { e.preventDefault(); document.getElementById('global-search-input')?.focus(); }
+      if (e.key === 'Escape' && state.activeModal) { state.activeModal = null; render(); }
+    });
+
+    // --- Main UI Views ---
+    function renderTopNav() {
+      const bc = state.recycleBin.length, u = state.currentUser, initials = (u?.displayName || 'AD').split(' ').map(n=>n[0]).join('').substring(0,2);
+      return `<header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs"><div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4"><div class="flex items-center gap-3"><div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-indigo-800 flex items-center justify-center text-white shadow-md shadow-indigo-200"><i class="fa-solid fa-graduation-cap text-lg"></i></div><h1 class="text-lg sm:text-xl font-extrabold text-slate-900 tracking-tight leading-tight">Attending and Non Attending Students</h1></div><div class="flex items-center gap-2 sm:gap-4"><div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${isFirebaseConfigured ? 'bg-amber-50 text-amber-800 border-amber-300' : 'bg-indigo-50 text-indigo-700 border-indigo-200'}"><i class="fa-solid ${isFirebaseConfigured ? 'fa-fire text-amber-500' : 'fa-database text-indigo-500'}"></i><span class="hidden sm:inline">${isFirebaseConfigured ? 'Firebase Live' : 'Local Storage Mode'}</span></div><div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${state.isOnline ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}"><span class="w-2 h-2 rounded-full ${state.isOnline ? 'bg-emerald-500 animate-pulse-subtle' : 'bg-amber-500'}"></span><span class="hidden sm:inline">${state.isOnline ? 'Online Synced' : 'Offline Mode'}</span></div><button onclick="state.activeModal='recycleBin';render();" class="relative inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${bc > 0 ? 'bg-rose-50 text-rose-700 border-rose-300 hover:bg-rose-100' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}"><i class="fa-solid fa-trash-can"></i><span class="hidden md:inline">Recycle Bin</span><span class="ml-0.5 px-1.5 py-0.2 rounded-full text-[10px] font-bold ${bc > 0 ? 'bg-rose-600 text-white' : 'bg-slate-200 text-slate-700'}">${bc}</span></button><div class="flex items-center gap-2 border-l border-slate-200 pl-3"><div class="w-8 h-8 rounded-full bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold flex items-center justify-center text-xs shadow-xs">${escapeHtml(initials)}</div><div class="hidden lg:block text-left"><p class="text-xs font-bold text-slate-800 leading-tight">${escapeHtml(u?.displayName || 'Administrator')}</p><p class="text-[10px] text-slate-500">${escapeHtml(u?.role || 'Accountant')}</p></div><button onclick="handleLogout()" title="Sign Out" class="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors"><i class="fa-solid fa-right-from-bracket text-sm"></i></button></div></div></div></header>`;
+    }
+
+    function renderKPIStats() {
+      const f = getFilteredStudents(), tot = f.length, att = f.filter(s => s.attendance === 'Attending').length, non = f.filter(s => s.attendance === 'Non-Attending').length;
+      const col = f.reduce((a, s) => a + (s.totalPaid || 0), 0), fees = f.reduce((a, s) => a + (s.totalFee || 0), 0), due = f.reduce((a, s) => a + (s.remainingDue || 0), 0);
+      return `<div class="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-2.5 mb-4">
+        <div class="bg-white p-2.5 sm:p-3 rounded-xl border border-slate-200/90 shadow-2xs flex items-center justify-between"><div><p class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Filtered Registry</p><h3 class="text-lg sm:text-xl font-extrabold text-slate-900 mt-0.5 leading-none">${tot}</h3><p class="text-[10px] text-slate-500 mt-1">Session: ${state.filters.academicYear === 'all' ? 'All Sessions' : state.filters.academicYear}</p></div><div class="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center text-sm shrink-0"><i class="fa-solid fa-users"></i></div></div>
+        <div class="bg-white p-2.5 sm:p-3 rounded-xl border border-slate-200/90 shadow-2xs flex items-center justify-between"><div><p class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Attendance Breakdown</p><div class="flex items-center gap-1.5 mt-1 flex-wrap"><span class="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200"><i class="fa-solid fa-school text-[8px]"></i> ${att} Attending</span><span class="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-bold text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-200"><i class="fa-solid fa-laptop-file text-[8px]"></i> ${non} Non-Attending</span></div></div><div class="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center text-sm shrink-0"><i class="fa-solid fa-clipboard-user"></i></div></div>
+        <div class="bg-white p-2.5 sm:p-3 rounded-xl border border-slate-200/90 shadow-2xs flex items-center justify-between"><div><p class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Fee Collected</p><h3 class="text-base sm:text-lg font-bold text-emerald-600 mt-0.5 leading-none">${formatCurrency(col)}</h3><p class="text-[10px] text-slate-500 mt-1">Of ${formatCurrency(fees)} Total Fee</p></div><div class="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center text-sm shrink-0"><i class="fa-solid fa-circle-check"></i></div></div>
+        <div class="bg-white p-2.5 sm:p-3 rounded-xl border border-slate-200/90 shadow-2xs flex items-center justify-between"><div><p class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Active Dues</p><h3 class="text-base sm:text-lg font-bold ${due > 0 ? 'text-rose-600' : 'text-slate-900'} mt-0.5 leading-none">${formatCurrency(due)}</h3><p class="text-[10px] ${due > 0 ? 'text-rose-600 font-semibold' : 'text-slate-500'} mt-1">${due > 0 ? 'Follow-up required' : 'All accounts settled'}</p></div><div class="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center text-sm shrink-0"><i class="fa-solid fa-hand-holding-dollar"></i></div></div>
+      </div>`;
+    }
+
+    function renderFiltersAndActions() {
+      const selCount = state.selectedIds.size, filt = getFilteredStudents();
+      return `<div class="bg-white rounded-xl border border-slate-200/80 p-3.5 sm:p-4 shadow-xs mb-5 space-y-3.5">
+        <div class="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5">
+          <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-2.5">
+            <div class="flex items-center gap-1.5 bg-slate-50 border border-slate-200 px-2.5 py-1.5 rounded-lg">
+              <i class="fa-regular fa-calendar-check text-slate-400 text-xs"></i>
+              <label for="filter-year" class="text-xs font-bold text-slate-500 uppercase tracking-wide">Session:</label>
+              <select id="filter-year" onchange="handleSessionChange(this.value)" class="bg-transparent text-xs sm:text-sm font-bold text-slate-800 focus:outline-none cursor-pointer">
+                <option value="all" ${state.filters.academicYear === 'all' ? 'selected' : ''}>All Academic Sessions</option>
+                ${state.academicYears.map(yr => `<option value="${yr}" ${state.filters.academicYear === yr ? 'selected' : ''}>${yr} ${yr === defaultAcademicYear ? '(Current Year)' : ''}</option>`).join('')}
+                <option value="__ADD_CUSTOM__" class="text-indigo-600 font-bold">+ Add Custom Session...</option>
+              </select>
+              <button type="button" onclick="state.activeModal='customSessionModal';render();" title="Add Custom Academic Year" class="ml-1 px-2 py-0.5 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded transition-colors flex items-center gap-1 cursor-pointer"><i class="fa-solid fa-plus text-[10px]"></i><span>Add Year</span></button>
+            </div>
+            <div class="relative w-full sm:w-52 lg:w-60">
+              <div class="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none text-slate-400"><i class="fa-solid fa-magnifying-glass text-xs"></i></div>
+              <input type="text" id="global-search-input" value="${escapeHtml(state.filters.search)}" oninput="state.filters.search=this.value;state.pagination.currentPage=1;render();" placeholder="Search ID, Name, Mobile..." class="w-full pl-7 pr-7 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-800 focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 focus:outline-none transition-all placeholder:text-slate-400" />
+              ${state.filters.search ? `<button onclick="state.filters.search='';render();" class="absolute inset-y-0 right-0 pr-2 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"><i class="fa-solid fa-xmark text-xs"></i></button>` : ''}
+            </div>
+          </div>
+          <div class="flex flex-wrap items-center gap-2 sm:gap-2.5">
+            <button onclick="openAddStudentModal()" class="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm px-4 py-2.5 rounded-lg shadow-xs shadow-indigo-200 transition-colors cursor-pointer"><i class="fa-solid fa-user-plus text-sm"></i><span>Add Student</span></button>
+            <button onclick="state.activeModal='importModal';state.importDataState.step='upload';render();" class="inline-flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm px-4 py-2.5 rounded-lg border border-slate-200 transition-colors cursor-pointer"><i class="fa-solid fa-file-import text-sm"></i><span>Import Data</span></button>
+            <div class="relative inline-block text-left">
+              <button onclick="toggleDropdown('export-menu')" class="inline-flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm px-4 py-2.5 rounded-lg border border-slate-200 transition-colors cursor-pointer"><i class="fa-solid fa-file-excel text-sm text-emerald-600"></i><span>Export</span><i class="fa-solid fa-chevron-down text-xs ml-0.5"></i></button>
+              <div id="export-menu" class="hidden absolute right-0 mt-1 w-56 bg-white rounded-lg shadow-xl border border-slate-200 py-1.5 z-20">
+                <button onclick="exportToExcel(getFilteredStudents(),'Filtered_Students');toggleDropdown('export-menu');" class="w-full text-left px-3.5 py-2.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-medium cursor-pointer"><i class="fa-solid fa-file-excel text-emerald-600"></i><span>Export View to Excel (.xlsx)</span></button>
+                <button onclick="exportToCSV(getFilteredStudents(),'Students_GoogleSheets');toggleDropdown('export-menu');" class="w-full text-left px-3.5 py-2.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-medium cursor-pointer"><i class="fa-solid fa-file-csv text-blue-600"></i><span>Export to CSV (Google Sheets)</span></button>
+                <div class="border-t border-slate-100 my-1"></div>
+                <button onclick="downloadSampleExcelTemplate();toggleDropdown('export-menu');" class="w-full text-left px-3.5 py-2.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-medium cursor-pointer"><i class="fa-solid fa-download text-indigo-600"></i><span>Download Blank Template</span></button>
+              </div>
+            </div>
+            <div class="relative inline-block text-left">
+              <button onclick="toggleDropdown('batch-menu')" class="inline-flex items-center gap-2 ${selCount > 0 ? 'bg-indigo-50 border-indigo-300 text-indigo-700' : 'bg-slate-50 border-slate-200 text-slate-600'} font-bold text-sm px-4 py-2.5 rounded-lg border transition-colors cursor-pointer"><i class="fa-solid fa-layer-group text-sm"></i><span>Batch Actions ${selCount > 0 ? `(${selCount})` : ''}</span><i class="fa-solid fa-chevron-down text-xs ml-0.5"></i></button>
+              <div id="batch-menu" class="hidden absolute right-0 mt-1 w-64 bg-white rounded-lg shadow-xl border border-slate-200 py-1.5 z-20">
+                <div class="px-3.5 py-1.5 text-[11px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-100">Selection (${selCount} of ${filt.length})</div>
+                <button onclick="selectAllFilteredStudents();toggleDropdown('batch-menu');" class="w-full text-left px-3.5 py-2 text-xs text-indigo-700 hover:bg-indigo-50 flex items-center gap-2 font-semibold cursor-pointer"><i class="fa-solid fa-check-double text-indigo-600"></i><span>Select All Students (${filt.length})</span></button>
+                ${selCount > 0 ? `<button onclick="deselectAllStudents();toggleDropdown('batch-menu');" class="w-full text-left px-3.5 py-2 text-xs text-slate-600 hover:bg-slate-50 flex items-center gap-2 font-medium cursor-pointer"><i class="fa-solid fa-xmark text-slate-400"></i><span>Deselect All</span></button>` : ''}
+                <div class="border-t border-slate-100 my-1"></div>
+                <button onclick="if(${selCount}>0)triggerDeleteSelected();else showToast('Select records first','Check checkboxes','warning');toggleDropdown('batch-menu');" class="w-full text-left px-3.5 py-2.5 text-xs text-rose-600 hover:bg-rose-50 flex items-center gap-2 font-semibold cursor-pointer"><i class="fa-solid fa-trash-can"></i><span>Delete Selected (${selCount})</span></button>
+                <button onclick="if(${selCount}>0)exportToExcel(state.students.filter(s=>state.selectedIds.has(s.id)),'Selected_Students');else showToast('Select records first','Check checkboxes','warning');toggleDropdown('batch-menu');" class="w-full text-left px-3.5 py-2.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-medium cursor-pointer"><i class="fa-solid fa-file-excel text-emerald-600"></i><span>Export Selected to Excel</span></button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center justify-between gap-3 pt-3.5 border-t border-slate-100">
+          <div class="flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
+            ${[['all', 'All Classes'], ['11', 'Class 11'], ['12', 'Class 12']].map(([v, l]) => `<button onclick="state.filters.grade='${v}';state.pagination.currentPage=1;render();" class="px-3.5 py-1.5 text-sm font-bold rounded-md transition-all ${state.filters.grade === v ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'}">${l}</button>`).join('')}
+          </div>
+          <div class="flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
+            <button onclick="state.filters.attendance='all';state.pagination.currentPage=1;render();" class="px-3.5 py-1.5 text-sm font-bold rounded-md transition-all ${state.filters.attendance === 'all' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'}">All</button>
+            <button onclick="state.filters.attendance='Attending';state.pagination.currentPage=1;render();" class="px-3.5 py-1.5 text-sm font-bold rounded-md transition-all ${state.filters.attendance === 'Attending' ? 'bg-emerald-600 text-white shadow-xs' : 'text-emerald-700 hover:bg-emerald-50'}"><i class="fa-solid fa-school text-xs mr-1.5"></i> Attending</button>
+            <button onclick="state.filters.attendance='Non-Attending';state.pagination.currentPage=1;render();" class="px-3.5 py-1.5 text-sm font-bold rounded-md transition-all ${state.filters.attendance === 'Non-Attending' ? 'bg-purple-600 text-white shadow-xs' : 'text-purple-700 hover:bg-purple-50'}"><i class="fa-solid fa-laptop-file text-xs mr-1.5"></i> Non-Attending</button>
+          </div>
+          <div class="flex items-center bg-slate-100 p-1 rounded-lg">
+            <select onchange="state.filters.stream=this.value;state.pagination.currentPage=1;render();" class="bg-white border-0 text-sm font-bold text-slate-800 px-3 py-1.5 rounded-md shadow-xs focus:ring-0 focus:outline-none cursor-pointer">
+              <option value="all" ${state.filters.stream === 'all' ? 'selected' : ''}>All Streams</option>
+              <option value="PCM" ${state.filters.stream === 'PCM' ? 'selected' : ''}>PCM</option>
+              <option value="PCB" ${state.filters.stream === 'PCB' ? 'selected' : ''}>PCB</option>
+              <option value="Commerce" ${state.filters.stream === 'Commerce' ? 'selected' : ''}>Commerce</option>
+              <option value="Arts" ${state.filters.stream === 'Arts' ? 'selected' : ''}>Arts / Humanities</option>
+            </select>
+          </div>
+          <div class="flex items-center bg-slate-100 p-1 rounded-lg">
+            <select onchange="state.filters.feeStatus=this.value;state.pagination.currentPage=1;render();" class="bg-white border-0 text-sm font-bold text-slate-800 px-3 py-1.5 rounded-md shadow-xs focus:ring-0 focus:outline-none cursor-pointer">
+              <option value="all" ${state.filters.feeStatus === 'all' ? 'selected' : ''}>All Fee Status</option>
+              <option value="Full Paid" ${state.filters.feeStatus === 'Full Paid' ? 'selected' : ''}>Full Paid</option>
+              <option value="Active Dues" ${state.filters.feeStatus === 'Active Dues' ? 'selected' : ''}>Active Dues</option>
+              <option value="Pending" ${state.filters.feeStatus === 'Pending' ? 'selected' : ''}>Pending (Unpaid)</option>
+            </select>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    function renderStudentRegistry() {
+      const filtered = getFilteredStudents(), totalCount = filtered.length;
+      const { currentPage, pageSize } = state.pagination, totalPages = Math.ceil(totalCount / pageSize) || 1;
+      const startIndex = (currentPage - 1) * pageSize, pageStudents = filtered.slice(startIndex, startIndex + pageSize);
+      const allPageSelected = pageStudents.length > 0 && pageStudents.every(s => state.selectedIds.has(s.id));
+
+      if (!filtered.length) {
+        return `<div class="bg-white rounded-xl border border-slate-200/80 p-12 text-center shadow-xs">
+          <div class="w-16 h-16 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center text-2xl mx-auto mb-3"><i class="fa-solid fa-user-slash"></i></div>
+          <h3 class="text-base font-bold text-slate-800">No student records found</h3>
+          <p class="text-xs text-slate-500 mt-1 max-w-sm mx-auto">No students match your active filters (${state.filters.academicYear}, Class: ${state.filters.grade}, Stream: ${state.filters.stream}). Try resetting filters or adding new admissions.</p>
+          <div class="mt-4 flex items-center justify-center gap-2">
+            <button onclick="resetFilters()" class="text-xs font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-lg border border-indigo-200 transition-colors cursor-pointer">Reset All Filters</button>
+            <button onclick="openAddStudentModal()" class="text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 px-3 py-1.5 rounded-lg transition-colors cursor-pointer">+ Add Student</button>
+          </div>
+        </div>`;
+      }
+
+      return `<div class="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden flex flex-col">
+        <div class="hidden lg:block overflow-x-auto">
+          <table class="w-full text-left border-collapse text-sm">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-xs">
+                <th class="py-4 px-4 w-10 text-center"><input type="checkbox" ${allPageSelected ? 'checked' : ''} onchange="toggleSelectAllPage(this.checked, ${JSON.stringify(pageStudents.map(s=>s.id)).replace(/"/g, '&quot;')})" class="rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 w-4 h-4 cursor-pointer" /></th>
+                <th class="py-4 px-3">Sequence ID</th><th class="py-4 px-4">Student Details</th><th class="py-4 px-3">Class &amp; Stream</th><th class="py-4 px-4">Parent Details</th><th class="py-4 px-3">DOB &amp; Gender</th><th class="py-4 px-4">Fee Status</th><th class="py-4 px-4 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              ${pageStudents.map(s => {
+                const isSel = state.selectedIds.has(s.id), isAtt = s.attendance === 'Attending';
+                const initials = (s.fullName || 'ST').split(' ').map(n=>n[0]).join('').substring(0,2);
+                const streamColor = s.optedStream.includes('PCM') ? 'bg-blue-50 text-blue-700 border-blue-200' : s.optedStream.includes('PCB') ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : s.optedStream.includes('Commerce') ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-rose-50 text-rose-700 border-rose-200';
+                return `<tr class="hover:bg-slate-50/80 transition-colors ${isSel ? 'bg-indigo-50/40' : ''}">
+                  <td class="py-4 px-4 text-center"><input type="checkbox" ${isSel ? 'checked' : ''} onchange="toggleSelectStudent('${s.id}')" class="rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 w-4 h-4 cursor-pointer" /></td>
+                  <td class="py-4 px-3 whitespace-nowrap"><span class="font-mono text-xs font-bold text-slate-800 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-md">${escapeHtml(s.sequenceNo)}</span></td>
+                  <td class="py-4 px-4"><div class="flex items-center gap-3"><div class="w-10 h-10 rounded-full ${isAtt ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-purple-100 text-purple-700 border-purple-200'} font-bold flex items-center justify-center text-sm shrink-0 border">${escapeHtml(initials)}</div><div><div class="font-bold text-slate-900 text-sm sm:text-base hover:text-indigo-600 cursor-pointer" onclick="openProfileViewModal('${s.id}')">${escapeHtml(s.fullName)}</div><div class="flex items-center gap-1.5 mt-0.5"><span class="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-0.5 rounded-full border ${isAtt ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-purple-50 text-purple-700 border-purple-200'}"><i class="fa-solid ${isAtt ? 'fa-school' : 'fa-laptop-file'} text-[10px]"></i> ${escapeHtml(s.attendance)}</span>${s.speciallyAbled === 'Yes' ? `<span class="text-[10px] bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded font-bold" title="${escapeHtml(s.disabilityType || 'Specially Abled')}">Divyang</span>` : ''}</div></div></div></td>
+                  <td class="py-4 px-3 whitespace-nowrap"><div class="flex flex-col gap-1"><span class="font-bold text-slate-900 text-sm">${escapeHtml(s.optedClass)}</span><span class="inline-block text-xs font-bold px-2.5 py-0.5 rounded-md border w-fit ${streamColor}">${escapeHtml(s.optedStream)}</span></div></td>
+                  <td class="py-4 px-4"><div class="font-semibold text-slate-900 text-sm">${escapeHtml(s.fatherName)}</div><div class="text-xs text-slate-600 flex items-center gap-1.5 mt-0.5 font-medium"><i class="fa-solid fa-phone text-[10px] text-slate-400"></i><a href="tel:${escapeHtml(s.contactNumber)}" class="hover:text-indigo-600 font-semibold">${escapeHtml(s.contactNumber)}</a></div></td>
+                  <td class="py-4 px-3 whitespace-nowrap"><div class="text-slate-900 font-semibold text-sm">${formatDate(s.dob)}</div><div class="text-xs text-slate-500 mt-0.5 flex items-center gap-1 font-medium"><i class="fa-solid ${s.gender === 'Female' ? 'fa-venus text-pink-500' : 'fa-mars text-blue-500'} text-xs"></i><span>${escapeHtml(s.gender)}, ${s.age || calculateAge(s.dob)} yrs</span></div></td>
+                  <td class="py-4 px-4 whitespace-nowrap"><div class="flex flex-col gap-1"><span class="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-0.5 rounded-full border w-fit ${s.feeStatus === 'Full Paid' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : s.feeStatus === 'Active Dues' ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-amber-50 text-amber-700 border-amber-200'}"><i class="fa-solid ${s.feeStatus === 'Full Paid' ? 'fa-circle-check' : 'fa-clock'} text-[10px]"></i> ${escapeHtml(s.feeStatus)}</span><div class="text-xs text-slate-600 font-medium">Paid: <strong class="text-emerald-600 font-bold">${formatCurrency(s.totalPaid)}</strong> / ${formatCurrency(s.totalFee)}</div>${s.remainingDue > 0 ? `<div class="text-xs font-bold text-rose-600">Due: ${formatCurrency(s.remainingDue)}</div>` : ''}</div></td>
+                  <td class="py-4 px-4 text-right whitespace-nowrap"><div class="inline-flex items-center gap-1.5"><button onclick="openProfileViewModal('${s.id}')" title="View Profile" class="px-2.5 py-1.5 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg border border-indigo-200 transition-all flex items-center gap-1 shadow-2xs hover:shadow-xs cursor-pointer"><i class="fa-solid fa-id-card text-sm"></i><span>View</span></button><button onclick="openExcelPreviewModal('${s.id}')" title="Preview Excel" class="px-2.5 py-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg border border-emerald-200 transition-all flex items-center gap-1 shadow-2xs hover:shadow-xs cursor-pointer"><i class="fa-solid fa-file-excel text-sm"></i><span>Excel</span></button><button onclick="openEditStudentModal('${s.id}')" title="Edit Student" class="px-2.5 py-1.5 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200 transition-all flex items-center gap-1 shadow-2xs hover:shadow-xs cursor-pointer"><i class="fa-solid fa-pen-to-square text-sm"></i><span>Edit</span></button><button onclick="triggerDeleteStudent('${s.id}')" title="Delete Student" class="px-2.5 py-1.5 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg border border-rose-200 transition-all flex items-center gap-1 shadow-2xs hover:shadow-xs cursor-pointer"><i class="fa-solid fa-trash-can text-sm"></i><span>Delete</span></button></div></td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+        <div class="lg:hidden divide-y divide-slate-100 p-3 sm:p-4 space-y-3">
+          ${pageStudents.map(s => {
+            const isSel = state.selectedIds.has(s.id), isAtt = s.attendance === 'Attending';
+            const initials = (s.fullName || 'ST').split(' ').map(n=>n[0]).join('').substring(0,2);
+            return `<div class="bg-white border rounded-xl p-4 shadow-2xs space-y-3 ${isSel ? 'border-indigo-400 bg-indigo-50/20' : 'border-slate-200'}">
+              <div class="flex items-center justify-between"><div class="flex items-center gap-2"><input type="checkbox" ${isSel ? 'checked' : ''} onchange="toggleSelectStudent('${s.id}')" class="rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 w-4 h-4 cursor-pointer" /><span class="font-mono text-xs font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">${escapeHtml(s.sequenceNo)}</span></div><span class="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full border ${isAtt ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-purple-50 text-purple-700 border-purple-200'}"><i class="fa-solid ${isAtt ? 'fa-school' : 'fa-laptop-file'} text-[10px]"></i> ${escapeHtml(s.attendance)}</span></div>
+              <div class="flex items-start gap-3"><div class="w-10 h-10 rounded-full ${isAtt ? 'bg-emerald-100 text-emerald-700' : 'bg-purple-100 text-purple-700'} font-bold flex items-center justify-center text-sm shrink-0 border">${escapeHtml(initials)}</div><div class="flex-1"><h4 class="font-bold text-slate-900 text-sm leading-tight hover:text-indigo-600 cursor-pointer" onclick="openProfileViewModal('${s.id}')">${escapeHtml(s.fullName)}</h4><p class="text-xs text-slate-500 mt-0.5"><span class="font-semibold text-slate-700">${escapeHtml(s.optedClass)}</span> &bull; <span class="font-medium text-indigo-700">${escapeHtml(s.optedStream)}</span></p><p class="text-xs text-slate-600 mt-1">Father: <span class="font-medium text-slate-800">${escapeHtml(s.fatherName)}</span> (${escapeHtml(s.contactNumber)})</p></div></div>
+              <div class="flex items-center justify-between bg-slate-50 p-2.5 rounded-lg border border-slate-100 text-xs"><div><span class="text-slate-500 font-medium">Fee:</span> <strong class="${s.feeStatus === 'Full Paid' ? 'text-emerald-700' : s.feeStatus === 'Active Dues' ? 'text-rose-700' : 'text-amber-700'} font-bold ml-1">${escapeHtml(s.feeStatus)}</strong></div><div class="text-right"><span class="text-slate-500">Paid:</span> <strong class="text-emerald-600">${formatCurrency(s.totalPaid)}</strong> / ${formatCurrency(s.totalFee)}</div></div>
+              <div class="flex items-center justify-end gap-2 pt-1 border-t border-slate-100"><button onclick="openProfileViewModal('${s.id}')" class="px-2.5 py-1 text-xs font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-md border border-indigo-200 cursor-pointer">View</button><button onclick="openExcelPreviewModal('${s.id}')" class="px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-md border border-emerald-200 cursor-pointer">Excel</button><button onclick="openEditStudentModal('${s.id}')" class="px-2.5 py-1 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md cursor-pointer">Edit</button><button onclick="triggerDeleteStudent('${s.id}')" class="px-2.5 py-1 text-xs font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-md border border-rose-200 cursor-pointer">Delete</button></div>
+            </div>`;
+          }).join('')}
+        </div>
+        <div class="bg-slate-50 border-t border-slate-200 px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+          <div class="text-slate-500">Showing <span class="font-bold text-slate-800">${startIndex + 1}</span> to <span class="font-bold text-slate-800">${Math.min(startIndex + pageSize, totalCount)}</span> of <span class="font-bold text-slate-800">${totalCount}</span> students</div>
+          <div class="flex items-center gap-2"><span class="text-slate-500">Per page:</span>
+            <select onchange="state.pagination.pageSize=Number(this.value);state.pagination.currentPage=1;render();" class="bg-white border border-slate-200 rounded px-2 py-1 text-xs font-semibold text-slate-700 focus:outline-none cursor-pointer">
+              <option value="5" ${pageSize === 5 ? 'selected' : ''}>5</option><option value="10" ${pageSize === 10 ? 'selected' : ''}>10</option><option value="25" ${pageSize === 25 ? 'selected' : ''}>25</option><option value="50" ${pageSize === 50 ? 'selected' : ''}>50</option>
+            </select>
+            <div class="inline-flex items-center gap-1 ml-2"><button onclick="if(state.pagination.currentPage>1){state.pagination.currentPage--;render();}" ${currentPage === 1 ? 'disabled class="opacity-40 cursor-not-allowed"' : 'class="hover:bg-slate-200 cursor-pointer"'} class="w-7 h-7 rounded border border-slate-200 bg-white flex items-center justify-center text-slate-600 transition-colors"><i class="fa-solid fa-chevron-left text-[10px]"></i></button><span class="px-2 font-bold text-slate-800">Page ${currentPage} of ${totalPages}</span><button onclick="if(state.pagination.currentPage<${totalPages}){state.pagination.currentPage++;render();}" ${currentPage === totalPages ? 'disabled class="opacity-40 cursor-not-allowed"' : 'class="hover:bg-slate-200 cursor-pointer"'} class="w-7 h-7 rounded border border-slate-200 bg-white flex items-center justify-center text-slate-600 transition-colors"><i class="fa-solid fa-chevron-right text-[10px]"></i></button></div>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    // --- Modals Layer ---
+    function renderSafetyDeleteModal() {
+      if (state.activeModal !== 'safetyDelete' || !state.safetyDeleteContext) return '';
+      const ctx = state.safetyDeleteContext, count = ctx.ids.length;
+      return `<div class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-backdrop animate-fade-in"><div class="bg-white rounded-2xl shadow-2xl max-w-md w-full border border-slate-200 overflow-hidden">
+        <div class="bg-rose-50 border-b border-rose-100 p-4 sm:p-5 flex items-start gap-3"><div class="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center text-lg shrink-0 shadow-xs"><i class="fa-solid fa-triangle-exclamation"></i></div><div><h3 class="text-base font-bold text-rose-950">Confirm Deletion Safeguard</h3><p class="text-xs text-rose-700 mt-0.5">Please review safety options before removing student record(s).</p></div></div>
+        <div class="p-5 space-y-4">
+          <div class="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs"><p class="font-bold text-slate-800 mb-1">Deleting <span class="text-rose-600 font-extrabold">${count}</span> student record(s):</p><div class="max-h-24 overflow-y-auto text-slate-600 space-y-0.5 text-[11px] pr-1">${ctx.studentNames.slice(0, 5).map(n => `<div class="truncate">&bull; ${escapeHtml(n)}</div>`).join('')}${ctx.studentNames.length > 5 ? `<div class="text-slate-400 font-semibold italic">+ ${ctx.studentNames.length - 5} more...</div>` : ''}</div></div>
+          <div class="space-y-2.5">
+            <button onclick="executeSoftDelete()" class="w-full text-left p-3.5 rounded-xl border-2 border-indigo-500 bg-indigo-50/50 hover:bg-indigo-50 transition-all flex items-start gap-3 cursor-pointer"><div class="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center text-sm shrink-0 mt-0.5"><i class="fa-solid fa-trash-can-arrow-up"></i></div><div><div class="flex items-center justify-between"><span class="text-xs font-bold text-indigo-950">Option A: Move to Recycle Bin</span><span class="text-[10px] font-extrabold uppercase bg-indigo-200 text-indigo-800 px-1.5 py-0.2 rounded">Recommended</span></div><p class="text-[11px] text-indigo-800 mt-0.5">Soft deletes records. Can be restored anytime with full fee history intact.</p></div></button>
+            <button onclick="executeHardDelete()" class="w-full text-left p-3.5 rounded-xl border border-rose-300 bg-rose-50/40 hover:bg-rose-100/60 transition-all flex items-start gap-3 cursor-pointer"><div class="w-8 h-8 rounded-lg bg-rose-600 text-white flex items-center justify-center text-sm shrink-0 mt-0.5"><i class="fa-solid fa-fire text-xs"></i></div><div><span class="text-xs font-bold text-rose-950">Option B: Delete Permanently</span><p class="text-[11px] text-rose-800 mt-0.5">Hard delete. Completely purges the record(s) from database immediately.</p></div></button>
+          </div>
+        </div>
+        <div class="bg-slate-50 border-t border-slate-200 px-5 py-3 flex justify-end"><button onclick="state.activeModal=null;state.safetyDeleteContext=null;render();" class="px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer">Cancel</button></div>
+      </div></div>`;
+    }
+
+    function renderRecycleBinModal() {
+      if (state.activeModal !== 'recycleBin') return '';
+      const bin = state.recycleBin, selCount = state.recycleBinSelectedIds.size, allSelected = bin.length > 0 && bin.every(i => state.recycleBinSelectedIds.has(i.id));
+      return `<div class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 modal-backdrop animate-fade-in"><div class="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[92vh] flex flex-col border border-slate-200 overflow-hidden">
+        <div class="bg-slate-900 text-white p-4 sm:p-5 flex items-center justify-between"><div class="flex items-center gap-3"><div class="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-400 text-rose-400 flex items-center justify-center text-lg"><i class="fa-solid fa-trash-arrow-up"></i></div><div><h3 class="text-base sm:text-lg font-bold text-white flex items-center gap-2">Recycle Bin <span class="text-xs font-bold bg-rose-500 text-white px-2 py-0.5 rounded-full">${bin.length} Record(s)</span></h3><p class="text-xs text-slate-400">Select students to recover or delete permanently, or use bulk bin actions.</p></div></div><button onclick="state.activeModal=null;state.recycleBinConfirmEmpty=false;render();" class="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"><i class="fa-solid fa-xmark text-lg"></i></button></div>
+        <div class="bg-slate-50 border-b border-slate-200 px-4 sm:px-5 py-3 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex flex-wrap items-center gap-2">
+            ${selCount > 0 ? `
+              <span class="text-xs font-extrabold text-indigo-800 bg-indigo-100 border border-indigo-200 px-2.5 py-1.5 rounded-lg flex items-center gap-1.5"><i class="fa-solid fa-circle-check text-indigo-600"></i> ${selCount} Selected</span>
+              <button type="button" onclick="restoreSelectedRecycleBin()" class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg shadow-2xs transition-colors cursor-pointer"><i class="fa-solid fa-rotate-left"></i><span>Recover Selected (${selCount})</span></button>
+              <button type="button" onclick="purgeSelectedRecycleBin()" class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg shadow-2xs transition-colors cursor-pointer"><i class="fa-solid fa-trash-can"></i><span>Delete Selected Permanently (${selCount})</span></button>
+              <button type="button" onclick="state.recycleBinSelectedIds.clear();render();" class="px-2 py-1 text-xs text-slate-600 hover:text-slate-900 font-semibold cursor-pointer">Deselect All</button>
+            ` : `<p class="text-xs text-slate-600 font-medium flex items-center gap-1.5"><i class="fa-solid fa-circle-info text-slate-400"></i><span>Select checkboxes below to choose students to recover or permanently delete.</span></p>`}
+          </div>
+          <div class="flex items-center gap-2">
+            <button type="button" onclick="restoreAllRecycleBin()" ${bin.length === 0 ? 'disabled class="opacity-40 cursor-not-allowed px-3 py-1.5 bg-slate-200 text-slate-500 font-bold text-xs rounded-lg flex items-center gap-1.5"' : 'class="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-lg shadow-2xs transition-colors cursor-pointer"'}><i class="fa-solid fa-rotate-left"></i><span>Recover All (${bin.length})</span></button>
+            <button type="button" onclick="triggerDeleteAllBinModal()" ${bin.length === 0 ? 'disabled class="opacity-40 cursor-not-allowed px-3 py-1.5 bg-slate-200 text-slate-500 font-bold text-xs rounded-lg flex items-center gap-1.5"' : 'class="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg shadow-2xs transition-colors cursor-pointer"'}><i class="fa-solid fa-dumpster-fire"></i><span>Delete All Bin Permanently</span></button>
+          </div>
+        </div>
+        ${state.recycleBinConfirmEmpty ? `
+          <div class="bg-rose-50 border-y-2 border-rose-300 p-4 px-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs animate-fade-in shadow-inner">
+            <div class="flex items-center gap-3 text-rose-950 font-bold"><div class="w-8 h-8 rounded-full bg-rose-600 text-white flex items-center justify-center text-sm shrink-0"><i class="fa-solid fa-triangle-exclamation"></i></div><div><p class="text-sm font-extrabold text-rose-900">Are you sure you want to permanently delete ALL ${bin.length} student records?</p><p class="text-xs text-rose-700 font-medium">This will purge all deleted students from the database forever. This action cannot be undone.</p></div></div>
+            <div class="flex items-center gap-2 shrink-0"><button type="button" onclick="confirmEmptyRecycleBinNow()" class="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs rounded-lg shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"><i class="fa-solid fa-trash-can"></i> Yes, Permanently Delete All</button><button type="button" onclick="state.recycleBinConfirmEmpty=false;render();" class="px-3.5 py-2 bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 font-bold text-xs rounded-lg transition-colors cursor-pointer">Cancel</button></div>
+          </div>
+        ` : ''}
+        <div class="flex-1 overflow-y-auto p-4 sm:p-5">
+          ${bin.length === 0 ? `<div class="py-16 text-center"><div class="w-16 h-16 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center text-2xl mx-auto mb-3"><i class="fa-solid fa-trash-can"></i></div><h4 class="text-base font-bold text-slate-800">Recycle Bin is Empty</h4><p class="text-xs text-slate-500 mt-1 max-w-sm mx-auto">No student records are currently in the recycle bin.</p></div>` : `
+            <div class="overflow-x-auto border border-slate-200 rounded-xl">
+              <table class="w-full text-left text-xs border-collapse">
+                <thead><tr class="bg-slate-100 text-slate-700 font-bold border-b border-slate-200"><th class="py-3 px-3 w-12 text-center"><input type="checkbox" ${allSelected ? 'checked' : ''} onchange="toggleSelectAllRecycleItems(this.checked)" class="rounded text-rose-600 focus:ring-rose-500 border-slate-300 w-4 h-4 cursor-pointer" /></th><th class="py-3 px-3">Student Name</th><th class="py-3 px-3">Sequence ID</th><th class="py-3 px-3">Class &amp; Stream</th><th class="py-3 px-3">Deleted Date</th><th class="py-3 px-3 text-right">Per-Student Actions</th></tr></thead>
+                <tbody class="divide-y divide-slate-100 bg-white">
+                  ${bin.map(item => {
+                    const isS = state.recycleBinSelectedIds.has(item.id);
+                    return `<tr class="hover:bg-slate-50 transition-colors ${isS ? 'bg-rose-50/40' : ''}"><td class="py-3 px-3 text-center"><input type="checkbox" ${isS ? 'checked' : ''} onchange="toggleSelectRecycleItem('${item.id}')" class="rounded text-rose-600 focus:ring-rose-500 border-slate-300 w-4 h-4 cursor-pointer" /></td><td class="py-3 px-3"><span class="font-bold text-slate-900 text-sm block">${escapeHtml(item.fullName)}</span><span class="text-[11px] text-slate-500 block">Father: ${escapeHtml(item.fatherName)} &bull; ${escapeHtml(item.contactNumber)}</span></td><td class="py-3 px-3 font-mono font-bold text-slate-800 text-xs">${escapeHtml(item.sequenceNo)}</td><td class="py-3 px-3"><span class="font-bold text-slate-800">${escapeHtml(item.optedClass)}</span><span class="text-[11px] font-semibold bg-slate-100 text-slate-700 px-2 py-0.5 rounded border border-slate-200 ml-1">${escapeHtml(item.optedStream)}</span></td><td class="py-3 px-3 text-slate-600 text-xs">${formatDate(item.deletedAt)}</td><td class="py-3 px-3 text-right whitespace-nowrap"><button type="button" onclick="restoreFromRecycleBin('${item.id}')" class="px-2.5 py-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg border border-emerald-200 transition-colors mr-1.5 inline-flex items-center gap-1 cursor-pointer"><i class="fa-solid fa-rotate-left"></i> Recover</button><button type="button" onclick="purgeItemFromRecycleBin('${item.id}')" class="px-2.5 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-lg border border-rose-200 transition-colors inline-flex items-center gap-1 cursor-pointer"><i class="fa-solid fa-trash-can"></i> Delete Permanently</button></td></tr>`;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          `}
+        </div>
+        <div class="bg-slate-50 border-t border-slate-200 px-5 py-3 flex items-center justify-between"><span class="text-xs text-slate-500 font-medium">${bin.length > 0 ? `${bin.length} record(s) in buffer` : 'Recycle Bin is clean'}</span><button onclick="state.activeModal=null;state.recycleBinConfirmEmpty=false;render();" class="px-4 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer">Close</button></div>
+      </div></div>`;
+    }
+
+    function renderCustomSessionModal() {
+      if (state.activeModal !== 'customSessionModal') return '';
+      return `<div class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-backdrop animate-fade-in"><div class="bg-white rounded-2xl shadow-2xl max-w-sm w-full border border-slate-200 overflow-hidden">
+        <div class="bg-indigo-900 text-white p-4 flex items-center justify-between"><div class="flex items-center gap-2.5"><i class="fa-solid fa-calendar-plus text-indigo-300"></i><h3 class="text-sm font-bold text-white">Add Academic Session</h3></div><button onclick="state.activeModal=null;render();" class="text-indigo-300 hover:text-white cursor-pointer"><i class="fa-solid fa-xmark text-sm"></i></button></div>
+        <div class="p-5 space-y-3"><label class="block text-xs font-bold text-slate-700">Academic Year (Format: YYYY-YYYY)</label><input type="text" id="custom-session-input" placeholder="e.g. 2027-2028" onkeydown="if(event.key==='Enter')saveCustomAcademicYear(this.value)" class="w-full text-sm p-2.5 bg-slate-50 border border-slate-300 rounded-lg font-bold text-slate-800 focus:bg-white focus:border-indigo-600 focus:outline-none" /><p class="text-[11px] text-slate-500">Custom sessions are saved and can be filtered anytime.</p></div>
+        <div class="bg-slate-50 border-t border-slate-200 px-5 py-3 flex justify-end gap-2"><button onclick="state.activeModal=null;render();" class="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg cursor-pointer">Cancel</button><button onclick="saveCustomAcademicYear(document.getElementById('custom-session-input').value)" class="px-4 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-xs cursor-pointer">Save &amp; View Session</button></div>
+      </div></div>`;
+    }
+
+    function renderImportModal() {
+      if (state.activeModal !== 'importModal') return '';
+      const { step, parsedRows } = state.importDataState;
+      return `<div class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-backdrop animate-fade-in"><div class="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] flex flex-col border border-slate-200 overflow-hidden">
+        <div class="bg-indigo-900 text-white p-4 sm:p-5 flex items-center justify-between"><div class="flex items-center gap-3"><div class="w-9 h-9 rounded-xl bg-indigo-500/20 border border-indigo-400 text-indigo-300 flex items-center justify-center text-base"><i class="fa-solid fa-file-import"></i></div><div><h3 class="text-base font-bold text-white">Smart Student Import Engine</h3><p class="text-xs text-indigo-200">Mixed Stream Auto-Categorization &amp; Fuzzy Date Handling</p></div></div><button onclick="state.activeModal=null;render();" class="text-indigo-300 hover:text-white p-1.5 rounded-lg hover:bg-indigo-800 cursor-pointer"><i class="fa-solid fa-xmark text-base"></i></button></div>
+        <div class="flex-1 overflow-y-auto p-5 space-y-5">
+          ${step === 'upload' ? `
+            <div class="space-y-4">
+              <div class="border-2 border-dashed border-indigo-300 hover:border-indigo-500 bg-slate-50 hover:bg-indigo-50/40 rounded-2xl p-8 text-center cursor-pointer transition-all group" onclick="document.getElementById('file-upload-input').click()">
+                <input type="file" id="file-upload-input" accept=".xlsx, .xls, .csv" class="hidden" onchange="handleFileUpload(event)" />
+                <div class="w-14 h-14 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center text-2xl mx-auto mb-3 group-hover:scale-110 transition-transform"><i class="fa-solid fa-cloud-arrow-up"></i></div>
+                <h4 class="text-sm font-bold text-slate-800">Drag &amp; Drop Excel or CSV File Here</h4><p class="text-xs text-slate-500 mt-1">Supports Microsoft Excel (.xlsx, .xls) and Google Sheets (.csv)</p><span class="inline-block mt-3 text-xs font-semibold text-indigo-600 bg-white border border-indigo-200 px-3 py-1.5 rounded-lg shadow-2xs group-hover:bg-indigo-600 group-hover:text-white transition-colors">Browse Local File</span>
+              </div>
+              <div class="border border-slate-200 rounded-xl p-4 bg-white">
+                <h5 class="text-xs font-bold text-slate-800 mb-2 flex items-center gap-1.5"><i class="fa-solid fa-link text-slate-400"></i> Or Paste CSV Data / Google Sheet Export:</h5>
+                <textarea id="csv-paste-area" rows="3" placeholder="Paste raw CSV text here..." class="w-full text-xs font-mono p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500"></textarea>
+                <div class="mt-2 flex justify-between items-center"><button onclick="downloadSampleExcelTemplate()" class="text-xs text-indigo-600 hover:underline flex items-center gap-1 cursor-pointer"><i class="fa-solid fa-download"></i> Download Sample Excel Template</button><button onclick="handlePasteImport()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-lg cursor-pointer">Parse Pasted CSV</button></div>
+              </div>
+            </div>
+          ` : `
+            <div class="space-y-4">
+              <div class="flex items-center justify-between bg-emerald-50 border border-emerald-200 p-3 rounded-xl text-xs text-emerald-900"><div class="flex items-center gap-2"><i class="fa-solid fa-circle-check text-emerald-600 text-base"></i><span>Found <strong class="font-bold text-emerald-950">${parsedRows.length}</strong> valid student records to import.</span></div><button onclick="state.importDataState.step='upload';render();" class="text-xs text-emerald-700 hover:underline font-semibold cursor-pointer">Change File</button></div>
+              <div class="border border-slate-200 rounded-xl overflow-hidden max-h-72 overflow-y-auto">
+                <table class="w-full text-left text-xs border-collapse">
+                  <thead><tr class="bg-slate-100 text-slate-600 font-semibold border-b border-slate-200 sticky top-0"><th class="py-2 px-3">Name</th><th class="py-2 px-3">Attendance</th><th class="py-2 px-3">Class</th><th class="py-2 px-3">Auto-Stream</th><th class="py-2 px-3">Normalized DOB</th><th class="py-2 px-3">Total Fee</th></tr></thead>
+                  <tbody class="divide-y divide-slate-100">${parsedRows.slice(0, 20).map(r => `<tr class="hover:bg-slate-50"><td class="py-2 px-3 font-bold text-slate-800">${escapeHtml(r.fullName)}</td><td class="py-2 px-3"><span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${r.attendance === 'Attending' ? 'bg-emerald-100 text-emerald-800' : 'bg-purple-100 text-purple-800'}">${escapeHtml(r.attendance)}</span></td><td class="py-2 px-3">${escapeHtml(r.optedClass)}</td><td class="py-2 px-3 font-semibold text-indigo-700">${escapeHtml(r.optedStream)}</td><td class="py-2 px-3 font-mono">${escapeHtml(r.dob)}</td><td class="py-2 px-3 font-semibold text-emerald-700">${formatCurrency(r.totalFee)}</td></tr>`).join('')}</tbody>
+                </table>
+              </div>
+            </div>
+          `}
+        </div>
+        <div class="bg-slate-50 border-t border-slate-200 px-5 py-3 flex items-center justify-between"><button onclick="state.activeModal=null;render();" class="px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer">Cancel</button>${step === 'preview' ? `<button onclick="commitImportedStudents()" class="px-5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-xs flex items-center gap-2 cursor-pointer"><i class="fa-solid fa-check"></i> Commit ${parsedRows.length} Students to Registry</button>` : ''}</div>
+      </div></div>`;
+    }
+
+    function renderStudentFormModal() {
+      if (state.activeModal !== 'studentForm') return '';
+      const isEditing = Boolean(state.editingStudentId);
+      const student = isEditing ? state.students.find(s => s.id === state.editingStudentId) : {
+        id: 'temp_' + Date.now(), academicYear: state.filters.academicYear || defaultAcademicYear, attendance: 'Attending', fullName: '', motherName: '', fatherName: '', gender: 'Male', dob: '2009-08-15', age: 17, religion: 'Hindu', casteCategory: 'General', nationality: 'Indian', onlyChild: 'No', speciallyAbled: 'No', disabilityType: '', annualFamilyIncome: 650000, tenthPassingYear: '2025', tenthMarksPercentage: 85.0, tenthRollNo: '', tenthBoard: 'CBSE', tenthBoardOther: '', optedClass: state.filters.grade === '12' ? 'Class 12' : 'Class 11', optedStream: state.filters.stream !== 'all' ? state.filters.stream : 'PCM', residentialAddress: '', contactNumber: '', whatsappNumber: '', email: '', totalFee: 75000, paymentPlan: 'Installment Plan', installments: [{ id: 1, title: 'Installment 1', dueDate: '2026-04-15', scheduledAmount: 25000, paidAmount: 25000, status: 'Paid', mode: 'UPI' }, { id: 2, title: 'Installment 2', dueDate: '2026-08-15', scheduledAmount: 25000, paidAmount: 0, status: 'Unpaid', mode: 'Cash' }, { id: 3, title: 'Installment 3', dueDate: '2026-12-15', scheduledAmount: 25000, paidAmount: 0, status: 'Unpaid', mode: 'Cash' }], totalPaid: 25000, remainingDue: 50000, feeStatus: 'Active Dues'
+      };
+      const seqPreview = student.sequenceNo || generateNextSequenceNo(student.academicYear, student.optedClass, student.optedStream);
+
+      return `<div class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 modal-backdrop animate-fade-in"><div class="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[92vh] flex flex-col border border-slate-200 overflow-hidden">
+        <div class="bg-indigo-900 text-white p-4 sm:p-5 flex items-center justify-between"><div class="flex items-center gap-3"><div class="w-9 h-9 rounded-xl bg-indigo-500/20 border border-indigo-400 text-indigo-300 flex items-center justify-center text-base"><i class="fa-solid ${isEditing ? 'fa-user-pen' : 'fa-user-plus'}"></i></div><div><h3 class="text-base font-bold text-white">${isEditing ? `Edit Student: ${escapeHtml(student.fullName)}` : 'New Student Admission Entry'}</h3><p class="text-xs text-indigo-200">Session ${escapeHtml(student.academicYear)}</p></div></div><button onclick="state.activeModal=null;render();" class="text-indigo-300 hover:text-white p-1.5 rounded-lg hover:bg-indigo-800 cursor-pointer"><i class="fa-solid fa-xmark text-base"></i></button></div>
+        <div class="bg-slate-100 border-b border-slate-200 px-4 sm:px-5 flex overflow-x-auto gap-2">
+          ${[['demographics', 'fa-id-card', 'A. Demographics & Mode'], ['academics', 'fa-graduation-cap', 'B. Academic Record (10th)'], ['contact', 'fa-address-book', 'C. Contact & Address'], ['fees', 'fa-calculator', 'D. Fee & Installments']].map(([tab, icon, title]) => `<button type="button" onclick="state.formTab='${tab}';render();" class="py-3 px-3.5 text-xs font-bold border-b-2 whitespace-nowrap transition-all cursor-pointer ${state.formTab === tab ? 'border-indigo-600 text-indigo-700 bg-white rounded-t-lg' : 'border-transparent text-slate-600 hover:text-slate-900'}"><i class="fa-solid ${icon} mr-1.5"></i> ${title}</button>`).join('')}
+        </div>
+        <form id="student-entry-form" onsubmit="handleSaveStudent(event)" class="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
+          <input type="hidden" id="form-student-id" value="${student.id}" />
+          <div class="${state.formTab === 'demographics' ? 'space-y-4' : 'hidden'}">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
+              <div><label class="block text-xs font-bold text-slate-600 uppercase mb-1">Generated Sequence Number (Preview)</label><input type="text" id="form-sequence-no" value="${escapeHtml(seqPreview)}" readonly class="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono font-bold text-indigo-700 cursor-not-allowed" /></div>
+              <div><label class="block text-xs font-bold text-slate-600 uppercase mb-1">Attendance Mode *</label><div class="grid grid-cols-2 gap-2"><label class="flex items-center justify-center gap-2 p-2 rounded-lg border cursor-pointer transition-all ${student.attendance === 'Attending' ? 'bg-emerald-50 border-emerald-500 text-emerald-800 font-bold' : 'bg-white border-slate-200 text-slate-600'}"><input type="radio" name="attendance" value="Attending" ${student.attendance === 'Attending' ? 'checked' : ''} onchange="updateFormAttendanceMode('Attending')" class="text-emerald-600 focus:ring-emerald-500" /><span class="text-xs">Attending</span></label><label class="flex items-center justify-center gap-2 p-2 rounded-lg border cursor-pointer transition-all ${student.attendance === 'Non-Attending' ? 'bg-purple-50 border-purple-500 text-purple-800 font-bold' : 'bg-white border-slate-200 text-slate-600'}"><input type="radio" name="attendance" value="Non-Attending" ${student.attendance === 'Non-Attending' ? 'checked' : ''} onchange="updateFormAttendanceMode('Non-Attending')" class="text-purple-600 focus:ring-purple-500" /><span class="text-xs">Non-Attending</span></label></div></div>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+              <div><label class="block text-xs font-bold text-slate-700 mb-1">Student Full Name *</label><input type="text" id="form-fullname" required value="${escapeHtml(student.fullName)}" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600" /></div>
+              <div><label class="block text-xs font-bold text-slate-700 mb-1">Father's Name *</label><input type="text" id="form-fathername" required value="${escapeHtml(student.fatherName)}" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg" /></div>
+              <div><label class="block text-xs font-bold text-slate-700 mb-1">Mother's Name *</label><input type="text" id="form-mothername" required value="${escapeHtml(student.motherName)}" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg" /></div>
+              <div><label class="block text-xs font-bold text-slate-700 mb-1">Gender *</label><select id="form-gender" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg"><option value="Male" ${student.gender === 'Male' ? 'selected' : ''}>Male</option><option value="Female" ${student.gender === 'Female' ? 'selected' : ''}>Female</option><option value="Other" ${student.gender === 'Other' ? 'selected' : ''}>Other</option></select></div>
+              <div><label class="block text-xs font-bold text-slate-700 mb-1">Date of Birth *</label><input type="date" id="form-dob" required value="${student.dob || '2009-08-15'}" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg" /></div>
+              <div><label class="block text-xs font-bold text-slate-700 mb-1">Category *</label><select id="form-category" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg"><option value="General" ${student.casteCategory === 'General' ? 'selected' : ''}>General</option><option value="OBC" ${student.casteCategory === 'OBC' ? 'selected' : ''}>OBC</option><option value="SC" ${student.casteCategory === 'SC' ? 'selected' : ''}>SC</option><option value="ST" ${student.casteCategory === 'ST' ? 'selected' : ''}>ST</option></select></div>
+              <div><label class="block text-xs font-bold text-slate-700 mb-1">Religion</label><input type="text" id="form-religion" value="${escapeHtml(student.religion || 'Hindu')}" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg" /></div>
+              <div><label class="block text-xs font-bold text-slate-700 mb-1">Nationality</label><input type="text" id="form-nationality" value="${escapeHtml(student.nationality || 'Indian')}" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg" /></div>
+              <div><label class="block text-xs font-bold text-slate-700 mb-1">Annual Income (₹)</label><input type="number" id="form-income" value="${student.annualFamilyIncome || 600000}" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg" /></div>
+            </div>
+          </div>
+          <div class="${state.formTab === 'academics' ? 'space-y-4' : 'hidden'}">
+            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+              <div><label class="block text-xs font-bold text-slate-700 mb-1">Opted Class *</label><select id="form-optedclass" onchange="updateSequencePreviewInForm()" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg font-bold text-indigo-700"><option value="Class 11" ${student.optedClass === 'Class 11' ? 'selected' : ''}>Class 11</option><option value="Class 12" ${student.optedClass === 'Class 12' ? 'selected' : ''}>Class 12</option></select></div>
+              <div><label class="block text-xs font-bold text-slate-700 mb-1">Opted Stream *</label><select id="form-optedstream" onchange="updateSequencePreviewInForm()" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg font-bold text-indigo-700"><option value="PCM" ${student.optedStream === 'PCM' ? 'selected' : ''}>PCM</option><option value="PCB" ${student.optedStream === 'PCB' ? 'selected' : ''}>PCB</option><option value="Commerce" ${student.optedStream === 'Commerce' ? 'selected' : ''}>Commerce</option><option value="Arts / Humanities" ${student.optedStream === 'Arts / Humanities' ? 'selected' : ''}>Arts / Humanities</option></select></div>
+              <div><label class="block text-xs font-bold text-slate-700 mb-1">10th Board *</label><select id="form-tenthboard" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg"><option value="CBSE" ${student.tenthBoard === 'CBSE' ? 'selected' : ''}>CBSE</option><option value="ICSE" ${student.tenthBoard === 'ICSE' ? 'selected' : ''}>ICSE</option><option value="State Board" ${student.tenthBoard === 'State Board' ? 'selected' : ''}>State Board</option><option value="Others" ${student.tenthBoard === 'Others' ? 'selected' : ''}>Others</option></select></div>
+              <div><label class="block text-xs font-bold text-slate-700 mb-1">10th Passing Year</label><input type="text" id="form-tenthyear" value="${escapeHtml(student.tenthPassingYear || '2025')}" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg" /></div>
+              <div><label class="block text-xs font-bold text-slate-700 mb-1">10th Marks (%) *</label><input type="number" step="0.1" id="form-tenthmarks" value="${student.tenthMarksPercentage || 88.5}" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg" /></div>
+              <div><label class="block text-xs font-bold text-slate-700 mb-1">10th Roll No</label><input type="text" id="form-tenthroll" value="${escapeHtml(student.tenthRollNo || '')}" placeholder="e.g. CBSE-2025-10294" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg" /></div>
+            </div>
+          </div>
+          <div class="${state.formTab === 'contact' ? 'space-y-4' : 'hidden'}">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div><label class="block text-xs font-bold text-slate-700 mb-1">Primary Contact (10 Digits) *</label><input type="tel" id="form-contactnumber" required maxlength="10" value="${escapeHtml(student.contactNumber)}" oninput="handleContactInput(this.value)" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg" /></div>
+              <div><div class="flex items-center justify-between mb-1"><label class="block text-xs font-bold text-slate-700">WhatsApp Number *</label><label class="inline-flex items-center gap-1.5 text-[11px] text-indigo-700 font-semibold cursor-pointer"><input type="checkbox" id="whatsapp-sync-checkbox" onchange="syncWhatsAppNumber(this.checked)" class="rounded text-indigo-600" /><span>Same as Contact</span></label></div><input type="tel" id="form-whatsappnumber" required maxlength="10" value="${escapeHtml(student.whatsappNumber)}" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg" /></div>
+              <div class="md:col-span-2"><label class="block text-xs font-bold text-slate-700 mb-1">Email Address</label><input type="email" id="form-email" value="${escapeHtml(student.email)}" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg" /></div>
+              <div class="md:col-span-2"><label class="block text-xs font-bold text-slate-700 mb-1">Residential Address *</label><textarea id="form-address" required rows="3" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg">${escapeHtml(student.residentialAddress)}</textarea></div>
+            </div>
+          </div>
+          <div class="${state.formTab === 'fees' ? 'space-y-4' : 'hidden'}">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
+              <div><label class="block text-xs font-bold text-slate-700 mb-1">Total Fee (₹) *</label><input type="number" id="form-totalfee" value="${student.totalFee || 75000}" oninput="recalculateFeeEngine()" class="w-full text-xs p-2.5 font-bold border border-slate-300 rounded-lg bg-white" /></div>
+              <div><label class="block text-xs font-bold text-slate-700 mb-1">Payment Plan *</label><select id="form-paymentplan" onchange="updatePaymentPlanType(this.value)" class="w-full text-xs p-2.5 font-bold border border-slate-300 rounded-lg bg-white text-indigo-700"><option value="Installment Plan" ${student.paymentPlan === 'Installment Plan' ? 'selected' : ''}>Installment Plan</option><option value="Full Payment" ${student.paymentPlan === 'Full Payment' ? 'selected' : ''}>Full Payment (100% Upfront)</option></select></div>
+              <div id="installment-count-box" class="${student.paymentPlan === 'Full Payment' ? 'hidden' : ''}"><label class="block text-xs font-bold text-slate-700 mb-1">Installment Count</label><select id="form-installment-count" onchange="regenerateInstallmentTable(this.value)" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg bg-white"><option value="2">2 Installments</option><option value="3" ${student.installments?.length === 3 ? 'selected' : ''}>3 Installments</option><option value="4" ${student.installments?.length === 4 ? 'selected' : ''}>4 Installments</option><option value="6" ${student.installments?.length === 6 ? 'selected' : ''}>6 Installments</option></select></div>
+            </div>
+            <div class="grid grid-cols-3 gap-3">
+              <div class="bg-white p-3 rounded-lg border border-slate-200 text-center"><span class="text-[10px] text-slate-500 uppercase font-semibold">Total Fee</span><h4 id="calc-total-fee" class="text-base font-bold text-slate-900">${formatCurrency(student.totalFee)}</h4></div>
+              <div class="bg-white p-3 rounded-lg border border-slate-200 text-center"><span class="text-[10px] text-slate-500 uppercase font-semibold">Total Paid</span><h4 id="calc-total-paid" class="text-base font-bold text-emerald-600">${formatCurrency(student.totalPaid)}</h4></div>
+              <div class="bg-white p-3 rounded-lg border border-slate-200 text-center"><span class="text-[10px] text-slate-500 uppercase font-semibold">Remaining Due</span><h4 id="calc-total-due" class="text-base font-bold ${student.remainingDue > 0 ? 'text-rose-600' : 'text-emerald-600'}">${formatCurrency(student.remainingDue)}</h4></div>
+            </div>
+            <div id="installments-section" class="${student.paymentPlan === 'Full Payment' ? 'hidden' : ''}"><div class="border border-slate-200 rounded-xl overflow-hidden"><table class="w-full text-left text-xs border-collapse"><thead><tr class="bg-slate-100 text-slate-600 font-semibold border-b border-slate-200"><th class="py-2.5 px-3">Installment #</th><th class="py-2.5 px-3">Due Date</th><th class="py-2.5 px-3">Scheduled (₹)</th><th class="py-2.5 px-3">Paid (₹)</th><th class="py-2.5 px-3">Status</th><th class="py-2.5 px-3">Mode</th></tr></thead><tbody id="installment-rows-body" class="divide-y divide-slate-100"></tbody></table></div></div>
+          </div>
+          <div class="pt-4 border-t border-slate-200 flex items-center justify-between"><button type="button" onclick="state.activeModal=null;render();" class="px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer">Cancel</button><div class="flex items-center gap-2"><button type="button" onclick="advanceFormTab()" class="px-3.5 py-2 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg cursor-pointer">Next Section &rarr;</button><button type="submit" class="px-5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm cursor-pointer">Save Student Record</button></div></div>
+        </form>
+      </div></div>`;
+    }
+
+    function renderProfileViewModal() {
+      if (state.activeModal !== 'profileView' || !state.viewingStudentId) return '';
+      const s = state.students.find(item => item.id === state.viewingStudentId); if (!s) return '';
+      return `<div class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 modal-backdrop animate-fade-in"><div class="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[92vh] flex flex-col border border-slate-200 overflow-hidden">
+        <div class="bg-slate-900 text-white p-4 sm:p-5 flex items-center justify-between"><div class="flex items-center gap-3"><div class="w-10 h-10 rounded-full bg-indigo-600 font-bold flex items-center justify-center text-sm border-2 border-indigo-400">${escapeHtml(s.fullName.substring(0,2).toUpperCase())}</div><div><h3 class="text-base font-bold text-white">${escapeHtml(s.fullName)}</h3><p class="text-xs text-slate-400">${escapeHtml(s.sequenceNo)} &bull; ${escapeHtml(s.attendance)}</p></div></div><button onclick="state.activeModal=null;render();" class="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 cursor-pointer"><i class="fa-solid fa-xmark text-base"></i></button></div>
+        <div class="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+            <div><span class="text-[10px] text-slate-500 uppercase font-semibold">Class &amp; Stream</span><p class="font-bold text-slate-800 mt-0.5">${escapeHtml(s.optedClass)} &bull; ${escapeHtml(s.optedStream)}</p></div>
+            <div><span class="text-[10px] text-slate-500 uppercase font-semibold">DOB &amp; Age</span><p class="font-bold text-slate-800 mt-0.5">${formatDate(s.dob)} (${s.age} yrs)</p></div>
+            <div><span class="text-[10px] text-slate-500 uppercase font-semibold">Category</span><p class="font-bold text-slate-800 mt-0.5">${escapeHtml(s.casteCategory || 'General')}</p></div>
+            <div><span class="text-[10px] text-slate-500 uppercase font-semibold">Fee Status</span><p class="font-bold ${s.feeStatus === 'Full Paid' ? 'text-emerald-700' : 'text-rose-700'} mt-0.5">${escapeHtml(s.feeStatus)}</p></div>
+          </div>
+          <div class="border border-slate-200 rounded-xl p-4 bg-white space-y-2">
+            <h4 class="font-bold text-slate-900 border-b pb-2 flex items-center gap-2"><i class="fa-solid fa-users text-indigo-600"></i> Family &amp; Contact</h4>
+            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+              <div><span class="text-slate-500">Father's Name:</span> <strong class="text-slate-800 block">${escapeHtml(s.fatherName)}</strong></div>
+              <div><span class="text-slate-500">Mother's Name:</span> <strong class="text-slate-800 block">${escapeHtml(s.motherName)}</strong></div>
+              <div><span class="text-slate-500">Contact:</span> <strong class="text-slate-800 block">${escapeHtml(s.contactNumber)}</strong></div>
+              <div><span class="text-slate-500">Email:</span> <strong class="text-slate-800 block">${escapeHtml(s.email || '—')}</strong></div>
+              <div class="sm:col-span-2"><span class="text-slate-500">Address:</span> <strong class="text-slate-800 block">${escapeHtml(s.residentialAddress)}</strong></div>
+            </div>
+          </div>
+          <div class="border border-slate-200 rounded-xl p-4 bg-white space-y-2">
+            <h4 class="font-bold text-slate-900 border-b pb-2 flex items-center gap-2"><i class="fa-solid fa-file-invoice-dollar text-emerald-600"></i> Fee Summary</h4>
+            <div class="grid grid-cols-3 gap-3 bg-slate-50 p-3 rounded-lg text-center">
+              <div><span class="text-[10px] text-slate-500 uppercase">Total</span><p class="font-bold text-slate-800">${formatCurrency(s.totalFee)}</p></div>
+              <div><span class="text-[10px] text-slate-500 uppercase">Paid</span><p class="font-bold text-emerald-600">${formatCurrency(s.totalPaid)}</p></div>
+              <div><span class="text-[10px] text-slate-500 uppercase">Due</span><p class="font-bold ${s.remainingDue > 0 ? 'text-rose-600' : 'text-emerald-600'}">${formatCurrency(s.remainingDue)}</p></div>
+            </div>
+          </div>
+        </div>
+        <div class="bg-slate-50 border-t border-slate-200 px-5 py-3 flex items-center justify-between"><button onclick="openExcelPreviewModal('${s.id}')" class="px-3.5 py-2 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg flex items-center gap-1.5 cursor-pointer"><i class="fa-solid fa-table"></i> Show in Excel Preview</button><div class="flex items-center gap-2"><button onclick="openEditStudentModal('${s.id}')" class="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer">Edit Record</button><button onclick="state.activeModal=null;render();" class="px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg cursor-pointer">Done</button></div></div>
+      </div></div>`;
+    }
+
+    function renderExcelPreviewModal() {
+      if (state.activeModal !== 'excelPreview' || !state.viewingStudentId) return '';
+      const s = state.students.find(item => item.id === state.viewingStudentId); if (!s) return '';
+      const fields = [
+        ['Sequence Number', s.sequenceNo], ['Student Name', s.fullName],
+        ['Attendance Mode', s.attendance, s.attendance === 'Attending' ? 'text-emerald-700' : 'text-purple-700'],
+        ['Class & Stream', `${s.optedClass} — ${s.optedStream}`], ["Father's Name & Contact", `${s.fatherName} | ${s.contactNumber}`],
+        ['Date of Birth & Gender', `${s.dob} (${s.gender})`], ['Total Course Fee', formatCurrency(s.totalFee), 'font-bold'],
+        ['Paid Fee Amount', formatCurrency(s.totalPaid), 'font-bold text-emerald-600'],
+        ['Outstanding Balance Due', formatCurrency(s.remainingDue), s.remainingDue > 0 ? 'font-bold text-rose-600' : 'font-bold text-emerald-600'],
+        ['Settlement Status', s.feeStatus, 'font-bold']
+      ];
+      return `<div class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 modal-backdrop animate-fade-in"><div class="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[92vh] flex flex-col border border-slate-200 overflow-hidden">
+        <div class="bg-emerald-800 text-white p-4 sm:p-5 flex items-center justify-between"><div class="flex items-center gap-3"><div class="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center text-lg shadow-xs"><i class="fa-solid fa-file-excel"></i></div><div><h3 class="text-base font-bold text-white">Excel Ledger Preview: ${escapeHtml(s.fullName)}</h3><p class="text-xs text-emerald-200">SheetJS Grid Preview &bull; ${escapeHtml(s.sequenceNo)}</p></div></div><button onclick="state.activeModal=null;render();" class="text-emerald-200 hover:text-white p-1.5 rounded-lg hover:bg-emerald-700 cursor-pointer"><i class="fa-solid fa-xmark text-base"></i></button></div>
+        <div class="flex-1 overflow-auto p-5 bg-slate-100">
+          <div class="bg-white border border-slate-300 shadow-sm rounded-lg overflow-hidden font-mono text-xs">
+            <div class="bg-slate-50 border-b border-slate-200 px-3 py-1.5 text-[11px] text-slate-600 flex items-center justify-between"><span>Workbook: <strong>${escapeHtml(s.sequenceNo)}.xlsx</strong></span><span class="text-emerald-700 font-bold">100% Calculated</span></div>
+            <table class="w-full text-left border-collapse"><tbody>${fields.map(([lbl, val, cls], idx) => `<tr class="border-b border-slate-200 ${idx === 0 ? 'bg-emerald-50 text-emerald-950 font-bold' : ''}"><td class="p-2 border-r border-slate-200 w-12 text-center text-slate-400">${idx + 1}</td><td class="p-2 border-r border-slate-200 font-sans font-bold w-48">${lbl}</td><td class="p-2 ${cls || ''}">${escapeHtml(val)}</td></tr>`).join('')}</tbody></table>
+          </div>
+        </div>
+        <div class="bg-slate-50 border-t border-slate-200 px-5 py-3 flex items-center justify-between"><button onclick="exportToExcel([s], 'Record_${s.sequenceNo}')" class="px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs flex items-center gap-2 cursor-pointer"><i class="fa-solid fa-download"></i> Download Single Record (.xlsx)</button><button onclick="state.activeModal=null;render();" class="px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer">Close</button></div>
+      </div></div>`;
+    }
+
+    function renderLoginScreen() {
+      return `<div class="min-h-screen bg-slate-100 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
+        <div class="sm:mx-auto sm:w-full sm:max-w-md"><div class="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-800 flex items-center justify-center text-white text-2xl shadow-lg shadow-indigo-200 mx-auto"><i class="fa-solid fa-graduation-cap"></i></div><h2 class="mt-4 text-center text-2xl font-extrabold text-slate-900 tracking-tight">Attending and Non Attending Students</h2><p class="mt-1 text-center text-xs font-semibold uppercase tracking-wider text-indigo-700">Portal Login</p></div>
+        <div class="mt-6 sm:mx-auto sm:w-full sm:max-w-md px-4 sm:px-0"><div class="bg-white py-8 px-6 sm:px-10 shadow-xl rounded-2xl border border-slate-200/80 space-y-5">
+          <form onsubmit="handleLoginSubmit(event)" class="space-y-4">
+            <div><label class="block text-xs font-bold text-slate-700 uppercase mb-1">Accountant Email ID</label><input type="email" id="login-email" required value="accountant@apexacademy.edu" class="w-full px-3 py-2.5 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600" /></div>
+            <div><label class="block text-xs font-bold text-slate-700 uppercase mb-1">Password</label><input type="password" id="login-password" required value="admin123" class="w-full px-3 py-2.5 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600" /></div>
+            <button type="submit" class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-md shadow-indigo-200 transition-all cursor-pointer">Sign In to Workspace &rarr;</button>
+          </form>
+        </div></div>
+      </div>`;
+    }
+
+    function render() {
+      const app = document.getElementById('app'); if (!app) return;
+      if (!state.isLoggedIn) { app.innerHTML = renderLoginScreen(); return; }
+      app.innerHTML = `
+        ${renderTopNav()}
+        <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full flex-1">${renderKPIStats()}${renderFiltersAndActions()}${renderStudentRegistry()}</main>
+        <footer class="bg-white border-t border-slate-200 py-5 text-center">
+          <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-center">
+            <p class="text-sm font-bold text-slate-800">Built by Vinayak Mishra (IIT Madras) | <a href="tel:+919508355456" class="text-indigo-600 hover:text-indigo-800 hover:underline transition-colors">+91 9508355456</a></p>
+          </div>
+        </footer>
+        ${renderSafetyDeleteModal()}${renderRecycleBinModal()}${renderCustomSessionModal()}${renderImportModal()}${renderStudentFormModal()}${renderProfileViewModal()}${renderExcelPreviewModal()}
+      `;
+      if (state.activeModal === 'studentForm') initInstallmentRowsInModal();
+    }
+
+    // --- Controllers & Handlers ---
+    async function handleLoginSubmit(e) {
+      e.preventDefault();
+      try {
+        const u = await mockFirebaseAuthService.signIn(document.getElementById('login-email').value, document.getElementById('login-password').value);
+        state.currentUser = u; state.isLoggedIn = true; showToast('Welcome Back', `Signed in as ${u.displayName}`, 'success'); render();
+      } catch (err) { showToast('Login Failed', err.message, 'error'); }
+    }
+
+    async function handleLogout() {
+      await mockFirebaseAuthService.signOut(); state.isLoggedIn = false; state.currentUser = null;
+      showToast('Signed Out', 'Safely logged out.', 'info'); render();
+    }
+
+    function toggleDropdown(id) { const m = document.getElementById(id); if (m) m.classList.toggle('hidden'); }
+    document.addEventListener('click', e => {
+      ['export-menu', 'batch-menu'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el && !el.classList.contains('hidden') && !el.contains(e.target) && !el.previousElementSibling?.contains(e.target)) el.classList.add('hidden');
+      });
+    });
+
+    function toggleSelectStudent(id) { state.selectedIds.has(id) ? state.selectedIds.delete(id) : state.selectedIds.add(id); render(); }
+    function toggleSelectAllPage(c, ids) { c ? ids.forEach(id => state.selectedIds.add(id)) : ids.forEach(id => state.selectedIds.delete(id)); render(); }
+    function resetFilters() {
+      state.filters = { academicYear: defaultAcademicYear, grade: 'all', attendance: 'all', stream: 'all', search: '', feeStatus: 'all' };
+      state.pagination.currentPage = 1; render(); showToast('Filters Reset', 'All filter constraints cleared.', 'info');
+    }
+
+    function handleContactInput(v) { const s = document.getElementById('whatsapp-sync-checkbox'); if (s?.checked) { const w = document.getElementById('form-whatsappnumber'); if (w) w.value = v; } }
+    function syncWhatsAppNumber(c) { if (c) { const w = document.getElementById('form-whatsappnumber'); if (w) w.value = document.getElementById('form-contactnumber')?.value || ''; } }
+    function updateFormAttendanceMode(m) { document.querySelectorAll('input[name="attendance"]').forEach(r => { if (r.value === m) r.checked = true; }); }
+    function updateSequencePreviewInForm() {
+      const g = document.getElementById('form-optedclass')?.value || 'Class 11', s = document.getElementById('form-optedstream')?.value || 'PCM';
+      const inp = document.getElementById('form-sequence-no'); if (inp) inp.value = generateNextSequenceNo(state.filters.academicYear || defaultAcademicYear, g, s);
+    }
+
+    function advanceFormTab() {
+      const tabs = ['demographics', 'academics', 'contact', 'fees'], idx = tabs.indexOf(state.formTab);
+      if (idx < tabs.length - 1) { state.formTab = tabs[idx + 1]; render(); }
+    }
+
+    function updatePaymentPlanType(plan) {
+      document.getElementById('installment-count-box')?.classList.toggle('hidden', plan === 'Full Payment');
+      document.getElementById('installments-section')?.classList.toggle('hidden', plan === 'Full Payment');
+      recalculateFeeEngine();
+    }
+
+    function initInstallmentRowsInModal() {
+      const tbody = document.getElementById('installment-rows-body'); if (!tbody) return;
+      const student = state.editingStudentId ? state.students.find(s => s.id === state.editingStudentId) : null;
+      const installments = student?.installments?.length ? student.installments : [
+        { id: 1, title: 'Installment 1', dueDate: '2026-04-15', scheduledAmount: 25000, paidAmount: 25000, status: 'Paid', mode: 'UPI' },
+        { id: 2, title: 'Installment 2', dueDate: '2026-08-15', scheduledAmount: 25000, paidAmount: 0, status: 'Unpaid', mode: 'Cash' },
+        { id: 3, title: 'Installment 3', dueDate: '2026-12-15', scheduledAmount: 25000, paidAmount: 0, status: 'Unpaid', mode: 'Cash' }
+      ];
+      tbody.innerHTML = installments.map(inst => `
+        <tr class="inst-row" data-id="${inst.id}">
+          <td class="py-2 px-3 font-semibold text-slate-800"><input type="text" class="inst-title bg-transparent font-semibold text-slate-800 w-28 focus:outline-none" value="${escapeHtml(inst.title)}" /></td>
+          <td class="py-2 px-3"><input type="date" class="inst-duedate text-xs p-1 border border-slate-200 rounded" value="${inst.dueDate || '2026-04-15'}" /></td>
+          <td class="py-2 px-3"><input type="number" class="inst-scheduled text-xs p-1 border border-slate-200 rounded w-24 font-bold" oninput="recalculateFeeEngine()" value="${inst.scheduledAmount}" /></td>
+          <td class="py-2 px-3"><input type="number" class="inst-paid text-xs p-1 border border-slate-200 rounded w-24 font-bold text-emerald-600" oninput="recalculateFeeEngine()" value="${inst.paidAmount}" /></td>
+          <td class="py-2 px-3"><select class="inst-status text-xs p-1 border border-slate-200 rounded font-semibold" onchange="recalculateFeeEngine()"><option value="Paid" ${inst.status === 'Paid' ? 'selected' : ''}>Paid</option><option value="Partial" ${inst.status === 'Partial' ? 'selected' : ''}>Partial</option><option value="Unpaid" ${inst.status === 'Unpaid' ? 'selected' : ''}>Unpaid</option></select></td>
+          <td class="py-2 px-3"><select class="inst-mode text-xs p-1 border border-slate-200 rounded"><option value="UPI" ${inst.mode === 'UPI' ? 'selected' : ''}>UPI</option><option value="Cash" ${inst.mode === 'Cash' ? 'selected' : ''}>Cash</option><option value="Cheque" ${inst.mode === 'Cheque' ? 'selected' : ''}>Cheque</option><option value="Bank Transfer" ${inst.mode === 'Bank Transfer' ? 'selected' : ''}>Bank</option></select></td>
+        </tr>
+      `).join('');
+      recalculateFeeEngine();
+    }
+
+    function regenerateInstallmentTable(countStr) {
+      const count = Number(countStr) || 3, totalFee = Number(document.getElementById('form-totalfee')?.value) || 75000;
+      const per = Math.round(totalFee / count), tbody = document.getElementById('installment-rows-body');
+      if (!tbody) return;
+      tbody.innerHTML = Array.from({ length: count }, (_, i) => ({
+        id: i + 1, title: `Installment ${i + 1}`, dueDate: `2026-${((i + 1) * 2 + 2).toString().padStart(2, '0')}-15`, scheduledAmount: per, paidAmount: i === 0 ? per : 0, status: i === 0 ? 'Paid' : 'Unpaid', mode: 'UPI'
+      })).map(inst => `
+        <tr class="inst-row" data-id="${inst.id}">
+          <td class="py-2 px-3 font-semibold text-slate-800"><input type="text" class="inst-title bg-transparent font-semibold text-slate-800 w-28 focus:outline-none" value="${escapeHtml(inst.title)}" /></td>
+          <td class="py-2 px-3"><input type="date" class="inst-duedate text-xs p-1 border border-slate-200 rounded" value="${inst.dueDate}" /></td>
+          <td class="py-2 px-3"><input type="number" class="inst-scheduled text-xs p-1 border border-slate-200 rounded w-24 font-bold" oninput="recalculateFeeEngine()" value="${inst.scheduledAmount}" /></td>
+          <td class="py-2 px-3"><input type="number" class="inst-paid text-xs p-1 border border-slate-200 rounded w-24 font-bold text-emerald-600" oninput="recalculateFeeEngine()" value="${inst.paidAmount}" /></td>
+          <td class="py-2 px-3"><select class="inst-status text-xs p-1 border border-slate-200 rounded font-semibold" onchange="recalculateFeeEngine()"><option value="Paid" ${inst.status === 'Paid' ? 'selected' : ''}>Paid</option><option value="Partial" ${inst.status === 'Partial' ? 'selected' : ''}>Partial</option><option value="Unpaid" ${inst.status === 'Unpaid' ? 'selected' : ''}>Unpaid</option></select></td>
+          <td class="py-2 px-3"><select class="inst-mode text-xs p-1 border border-slate-200 rounded"><option value="UPI">UPI</option><option value="Cash">Cash</option><option value="Cheque">Cheque</option><option value="Bank Transfer">Bank</option></select></td>
+        </tr>
+      `).join('');
+      recalculateFeeEngine();
+    }
+
+    function recalculateFeeEngine() {
+      const totalFeeInput = document.getElementById('form-totalfee'); if (!totalFeeInput) return;
+      const totalFee = Number(totalFeeInput.value) || 0;
+      let totalPaid = 0;
+      if (document.getElementById('form-paymentplan')?.value === 'Full Payment') totalPaid = totalFee;
+      else document.querySelectorAll('.inst-paid').forEach(inp => totalPaid += Number(inp.value) || 0);
+      const due = Math.max(0, totalFee - totalPaid);
+      const kTot = document.getElementById('calc-total-fee'), kPaid = document.getElementById('calc-total-paid'), kDue = document.getElementById('calc-total-due');
+      if (kTot) kTot.innerText = formatCurrency(totalFee);
+      if (kPaid) kPaid.innerText = formatCurrency(totalPaid);
+      if (kDue) { kDue.innerText = formatCurrency(due); kDue.className = due > 0 ? 'text-base font-bold text-rose-600' : 'text-base font-bold text-emerald-600'; }
+    }
+
+    async function handleSaveStudent(e) {
+      e.preventDefault();
+      const isEditing = Boolean(state.editingStudentId), studentId = isEditing ? state.editingStudentId : 'std_' + Date.now();
+      const attendance = document.querySelector('input[name="attendance"]:checked')?.value || 'Attending';
+      const fullName = document.getElementById('form-fullname')?.value.trim();
+      const fatherName = document.getElementById('form-fathername')?.value.trim();
+      const motherName = document.getElementById('form-mothername')?.value.trim();
+      const contactNumber = document.getElementById('form-contactnumber')?.value.trim();
+      const residentialAddress = document.getElementById('form-address')?.value.trim();
+
+      if (!fullName || !fatherName || !motherName || !contactNumber || !residentialAddress) {
+        return showToast('Required Fields Missing', 'Please fill all mandatory fields (*)', 'error');
+      }
+
+      const totalFee = Number(document.getElementById('form-totalfee')?.value) || 0;
+      const paymentPlan = document.getElementById('form-paymentplan')?.value || 'Installment Plan';
+      let installments = [], totalPaid = 0, fullPaymentDetails = null;
+
+      if (paymentPlan === 'Full Payment') {
+        totalPaid = totalFee; fullPaymentDetails = { date: new Date().toISOString().split('T')[0], mode: 'UPI', reference: 'UPI/' + Date.now() };
+      } else {
+        document.querySelectorAll('.inst-row').forEach((row, idx) => {
+          const sc = Number(row.querySelector('.inst-scheduled')?.value) || 0, pd = Number(row.querySelector('.inst-paid')?.value) || 0;
+          totalPaid += pd;
+          installments.push({ id: idx + 1, title: row.querySelector('.inst-title')?.value || `Installment ${idx + 1}`, dueDate: row.querySelector('.inst-duedate')?.value || '', scheduledAmount: sc, paidAmount: pd, status: row.querySelector('.inst-status')?.value || 'Unpaid', mode: row.querySelector('.inst-mode')?.value || 'Cash' });
+        });
+      }
+
+      const remainingDue = Math.max(0, totalFee - totalPaid);
+      const optedClass = document.getElementById('form-optedclass')?.value || 'Class 11', optedStream = document.getElementById('form-optedstream')?.value || 'PCM';
+      const academicYear = state.filters.academicYear !== 'all' ? state.filters.academicYear : defaultAcademicYear;
+      const existing = isEditing ? state.students.find(s => s.id === studentId) : null;
+      const sequenceNo = existing ? existing.sequenceNo : generateNextSequenceNo(academicYear, optedClass, optedStream);
+      const dob = document.getElementById('form-dob')?.value || '2009-08-15';
+
+      const rec = {
+        id: studentId, sequenceNo, academicYear, attendance, fullName, fatherName, motherName,
+        gender: document.getElementById('form-gender')?.value || 'Male', dob, age: calculateAge(dob),
+        casteCategory: document.getElementById('form-category')?.value || 'General', religion: document.getElementById('form-religion')?.value || 'Hindu',
+        nationality: document.getElementById('form-nationality')?.value || 'Indian', annualFamilyIncome: Number(document.getElementById('form-income')?.value) || 0,
+        tenthBoard: document.getElementById('form-tenthboard')?.value || 'CBSE', tenthPassingYear: document.getElementById('form-tenthyear')?.value || '2025',
+        tenthMarksPercentage: Number(document.getElementById('form-tenthmarks')?.value) || 0, tenthRollNo: document.getElementById('form-tenthroll')?.value || '',
+        optedClass, optedStream, contactNumber, whatsappNumber: document.getElementById('form-whatsappnumber')?.value.trim() || contactNumber,
+        email: document.getElementById('form-email')?.value.trim(), residentialAddress, totalFee, paymentPlan, fullPaymentDetails, installments, totalPaid, remainingDue,
+        feeStatus: remainingDue === 0 ? 'Full Paid' : totalPaid > 0 ? 'Active Dues' : 'Pending', createdAt: existing?.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString()
+      };
+
+      if (isEditing) state.students = state.students.map(s => s.id === studentId ? rec : s);
+      else state.students.unshift(rec);
+
+      await mockFirestoreService.saveStudents(state.students);
+      state.activeModal = null; state.editingStudentId = null;
+      showToast(isEditing ? 'Student Updated' : 'Admission Registered', `${fullName} saved successfully (${sequenceNo}).`, 'success'); render();
+    }
+
+    // --- Import Parsing ---
+    function handleFileUpload(e) {
+      const file = e.target.files[0]; if (!file) return;
+      const reader = new FileReader();
+      reader.onload = evt => {
+        try {
+          const wb = XLSX.read(new Uint8Array(evt.target.result), { type: 'array' });
+          parseImportRows(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' }));
+        } catch (err) { showToast('Import Error', 'Failed to read Excel workbook: ' + err.message, 'error'); }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function handlePasteImport() {
+      const text = document.getElementById('csv-paste-area')?.value.trim(); if (!text) return showToast('Empty Data', 'Please paste CSV content.', 'warning');
+      try {
+        const wb = XLSX.read(text, { type: 'string' });
+        parseImportRows(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' }));
+      } catch (err) { showToast('Parsing Failed', 'Could not parse text: ' + err.message, 'error'); }
+    }
+
+    function parseImportRows(rows) {
+      if (!rows?.length) return showToast('No Data', 'No records found in selected file.', 'warning');
+      const year = state.filters.academicYear !== 'all' ? state.filters.academicYear : defaultAcademicYear;
+      const parsed = rows.map((r, idx) => {
+        const getV = pats => { for (const k of Object.keys(r)) { for (const p of pats) if (new RegExp(p, 'i').test(k)) return r[k]; } return ''; };
+        const fullName = String(getV(['name', 'student', 'candidate'])).trim() || `Imported Student ${idx + 1}`;
+        const fatherName = String(getV(['father', 'guardian', 'parent'])).trim() || 'Not Specified';
+        const attendance = normalizeAttendance(getV(['attendance', 'attending', 'mode', 'status']));
+        const optedStream = normalizeStream(getV(['stream', 'subject', 'course', 'branch']));
+        const optedClass = String(getV(['class', 'grade'])).includes('12') ? 'Class 12' : 'Class 11';
+        const dob = normalizeDate(getV(['dob', 'birth', 'date of birth']));
+        const contactNumber = String(getV(['contact', 'mobile', 'phone'])).replace(/\D/g, '').substring(0, 10) || '9876543210';
+        const totalFee = Number(getV(['fee', 'total fee', 'course fee'])) || 75000, paidAmount = Number(getV(['paid', 'amount paid', 'deposit'])) || 0;
+        return {
+          id: 'imp_' + Date.now() + '_' + idx, academicYear: year, sequenceNo: generateNextSequenceNo(year, optedClass, optedStream) + '-' + idx,
+          attendance, fullName, fatherName, motherName: 'Not Provided', gender: /female|girl|f/i.test(String(getV(['gender', 'sex']))) ? 'Female' : 'Male',
+          dob, age: calculateAge(dob), casteCategory: 'General', religion: 'Hindu', nationality: 'Indian', optedClass, optedStream, contactNumber,
+          whatsappNumber: contactNumber, email: `${fullName.toLowerCase().replace(/[^a-z]/g, '')}@student.edu`, residentialAddress: String(getV(['address', 'city', 'location'])).trim() || 'Campus Area',
+          totalFee, paymentPlan: 'Full Payment', totalPaid: paidAmount, remainingDue: Math.max(0, totalFee - paidAmount),
+          feeStatus: paidAmount >= totalFee ? 'Full Paid' : paidAmount > 0 ? 'Active Dues' : 'Pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+        };
+      });
+      state.importDataState = { rawRows: rows, parsedRows: parsed, step: 'preview' }; render();
+    }
+
+    async function commitImportedStudents() {
+      const { parsedRows } = state.importDataState; if (!parsedRows?.length) return;
+      const year = state.filters.academicYear !== 'all' ? state.filters.academicYear : defaultAcademicYear;
+      parsedRows.forEach(s => { s.sequenceNo = generateNextSequenceNo(year, s.optedClass, s.optedStream); state.students.unshift(s); });
+      await mockFirestoreService.saveStudents(state.students);
+      const c = parsedRows.length; state.importDataState = { rawRows: [], parsedRows: [], step: 'upload' }; state.activeModal = null;
+      showToast('Import Complete', `Successfully imported ${c} students.`, 'success'); render();
+    }
+
+    async function initApp() {
+      if (isFirebaseConfigured && fbAuth) {
+        fbAuth.onAuthStateChanged(async user => {
+          if (user) {
+            state.isLoggedIn = true;
+            state.currentUser = {
+              uid: user.uid,
+              email: user.email,
+              displayName: user.displayName || (user.email ? user.email.split('@')[0] : 'Administrator'),
+              role: 'Head Accountant & Registrar'
+            };
+            localStorage.setItem('attendance_auth_user_v1', JSON.stringify(state.currentUser));
+          } else {
+            const s = localStorage.getItem('attendance_auth_user_v1');
+            if (s) { try { state.currentUser = JSON.parse(s); state.isLoggedIn = true; } catch(e){} }
+            else { state.isLoggedIn = false; }
+          }
+          state.students = await firestoreService.fetchStudents();
+          state.recycleBin = await firestoreService.fetchRecycleBin();
+          render();
+        });
+      } else {
+        state.students = await firestoreService.fetchStudents();
+        state.recycleBin = await firestoreService.fetchRecycleBin();
+        state.currentUser = firebaseAuthService.getCurrentUser();
+        render();
+      }
+    }
+
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initApp);
+    else initApp();
+  </script>
+</body>
+</html>
