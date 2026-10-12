@@ -2,9 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>NEPS Attending and Non Attending Students</title>
+  <title>Attending and Non Attending Students</title>
   <meta name="description" content="Comprehensive school registry and fee management dashboard for Class 11 & 12 attending and non-attending students with Excel/Sheets import-export, installment tracking, and recycle bin safeguards." />
-  <meta property="og:title" content="NEPS Attending and Non Attending Students" />
+  <meta property="og:title" content="Attending and Non Attending Students" />
   <meta property="og:description" content="Comprehensive school registry and fee management dashboard for Class 11 & 12 attending and non-attending students with Excel/Sheets import-export, installment tracking, and recycle bin safeguards." />
   <meta property="og:type" content="website" /><meta name="twitter:card" content="summary_large_image" />
   <link rel="preconnect" href="https://fonts.googleapis.com" /><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -34,14 +34,23 @@
        Replace the placeholder values below with your real project credentials.
        ===================================================================== */
     const firebaseConfig = {
-      apiKey: "AIzaSyDDW24SPeUqIEM1-IQkNxDOcll2Wpo7Qek",
-      authDomain: "neps-8310f.firebaseapp.com",
-      projectId: "neps-8310f",
-      storageBucket: "neps-8310f.firebasestorage.app",
-      messagingSenderId: "941546631938",
-      appId: "1:941546631938:web:1eba3ef7882c303dccc81b"
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+      projectId: "YOUR_PROJECT_ID",
+      storageBucket: "YOUR_PROJECT_ID.appspot.com",
+      messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+      appId: "YOUR_APP_ID"
     };
+
+    // 🔒 SINGLE AUTHORIZED ADMIN (Only this admin has permission to log in)
+    const PORTAL_ADMIN_EMAIL = "vinayakmishra923@gmail.com";
     /* ============================ END FIREBASE CONFIG ============================ */
+
+    // Helper: Check if email is the single authorized administrator
+    function isAuthorizedAdmin(email) {
+      if (!email) return false;
+      return String(email).trim().toLowerCase() === PORTAL_ADMIN_EMAIL.trim().toLowerCase();
+    }
 
     // --- Firebase Initialization & Detection ---
     let isFirebaseConfigured = Boolean(
@@ -68,28 +77,50 @@
       }
     }
 
-    // --- Persistence & Auth Services (Live Firestore + Auth with Offline Fallback) ---
+    // --- Persistence & Auth Services (Live Firestore + Auth with Single-Admin Security) ---
     const firebaseAuthService = {
       async signIn(email, password) {
+        const cleanEmail = (email || '').trim().toLowerCase();
+
+        // Strict Single Admin Validation: Immediately reject any other email
+        if (!isAuthorizedAdmin(cleanEmail)) {
+          throw new Error(`Access Denied: Only the authorized portal admin (${PORTAL_ADMIN_EMAIL}) has access to this dashboard. Account "${email}" is not authorized.`);
+        }
+
         if (isFirebaseConfigured && fbAuth) {
-          const cred = await fbAuth.signInWithEmailAndPassword(email, password);
+          try {
+            const cred = await fbAuth.signInWithEmailAndPassword(cleanEmail, password);
+            if (!isAuthorizedAdmin(cred.user?.email)) {
+              await fbAuth.signOut();
+              throw new Error(`Access Denied: User "${cred.user?.email}" is not authorized as portal administrator.`);
+            }
+            const user = {
+              uid: cred.user.uid,
+              email: cred.user.email,
+              displayName: cred.user.displayName || 'Vinayak Mishra',
+              role: 'Portal Administrator & Head Registrar'
+            };
+            localStorage.setItem('attendance_auth_user_v1', JSON.stringify(user));
+            return user;
+          } catch (err) {
+            if (err.message && err.message.includes('Access Denied')) throw err;
+            throw new Error(err.message || 'Firebase login failed. Please check your credentials.');
+          }
+        }
+
+        // Standalone / Offline Connected Fallback
+        await new Promise(r => setTimeout(r, 150));
+        if (password && password.length >= 4) {
           const user = {
-            uid: cred.user.uid,
-            email: cred.user.email,
-            displayName: cred.user.displayName || (cred.user.email ? cred.user.email.split('@')[0] : 'Administrator'),
-            role: 'Head Accountant & Registrar'
+            uid: 'admin_vinayak',
+            email: PORTAL_ADMIN_EMAIL,
+            displayName: 'Vinayak Mishra',
+            role: 'Portal Administrator & Head Registrar'
           };
           localStorage.setItem('attendance_auth_user_v1', JSON.stringify(user));
           return user;
         }
-        // Local Demo Mode Fallback
-        await new Promise(r => setTimeout(r, 150));
-        if (email && password) {
-          const user = { uid: 'admin_01', email, displayName: email.split('@')[0] || 'Rajesh Sharma', role: 'Head Accountant & Registrar' };
-          localStorage.setItem('attendance_auth_user_v1', JSON.stringify(user));
-          return user;
-        }
-        throw new Error('Please enter valid email and password');
+        throw new Error('Please enter your administrator password (min 4 characters).');
       },
       async signOut() {
         if (isFirebaseConfigured && fbAuth) {
@@ -101,10 +132,18 @@
       getCurrentUser() {
         if (isFirebaseConfigured && fbAuth?.currentUser) {
           const u = fbAuth.currentUser;
-          return { uid: u.uid, email: u.email, displayName: u.displayName || u.email?.split('@')[0] || 'Administrator', role: 'Head Accountant & Registrar' };
+          if (isAuthorizedAdmin(u.email)) {
+            return { uid: u.uid, email: u.email, displayName: u.displayName || 'Vinayak Mishra', role: 'Portal Administrator & Head Registrar' };
+          }
         }
         const s = localStorage.getItem('attendance_auth_user_v1');
-        return s ? JSON.parse(s) : { uid: 'admin_01', email: 'accountant@apexacademy.edu', displayName: 'Rajesh Sharma', role: 'Head Accountant & Registrar' };
+        if (s) {
+          try {
+            const u = JSON.parse(s);
+            if (isAuthorizedAdmin(u.email)) return u;
+          } catch(e) {}
+        }
+        return { uid: 'admin_vinayak', email: PORTAL_ADMIN_EMAIL, displayName: 'Vinayak Mishra', role: 'Portal Administrator & Head Registrar' };
       }
     };
     const mockFirebaseAuthService = firebaseAuthService; // alias for seamless compatibility
@@ -217,6 +256,36 @@
         mkStudent({ id: 'std_008', seq: '2026-11-Arts-001', att: 'Non-Attending', name: 'Arjun Nambiar', father: 'Suresh Nambiar', dob: '2009-02-14', speciallyAbled: 'Yes', disabilityType: 'Hearing Impairment', grade: 'Class 11', stream: 'Arts / Humanities', phone: '9447118899', addr: 'Panampilly Nagar, Kochi - 682036', fee: 60000, paid: 60000, plan: 'Full Payment' })
       ];
     }
+
+    // --- Application Constants & Brand Assets ---
+    // NEPS Badge Logo (matches uploaded profile picture)
+    const BRAND_PROFILE_LOGO = `data:image/svg+xml;utf8,${encodeURIComponent(`
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="100%" height="100%">
+        <defs>
+          <linearGradient id="nepsBg" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#070c1e"/>
+            <stop offset="50%" stop-color="#0b132b"/>
+            <stop offset="100%" stop-color="#1c2541"/>
+          </linearGradient>
+          <linearGradient id="nepsGlow" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#38bdf8"/>
+            <stop offset="50%" stop-color="#00f2fe"/>
+            <stop offset="100%" stop-color="#0ea5e9"/>
+          </linearGradient>
+          <filter id="neonShadow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="3" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          </filter>
+        </defs>
+        <!-- Background circular badge -->
+        <rect width="200" height="200" rx="100" fill="url(#nepsBg)"/>
+        <!-- Ring accents -->
+        <circle cx="100" cy="100" r="92" fill="none" stroke="#38bdf8" stroke-width="2.5" stroke-opacity="0.35"/>
+        <circle cx="100" cy="100" r="85" fill="none" stroke="#00f2fe" stroke-width="1.2" stroke-opacity="0.6" stroke-dasharray="8 4"/>
+        <!-- NEPS typography -->
+        <text x="100" y="116" font-family="'Plus Jakarta Sans', 'Arial Black', sans-serif" font-size="44" font-weight="900" fill="url(#nepsGlow)" text-anchor="middle" letter-spacing="4" filter="url(#neonShadow)">NEPS</text>
+      </svg>
+    `.trim())}`;
 
     // --- State & Helpers ---
     function getCurrentAcademicYear() { const n = new Date(), y = n.getFullYear(); return (n.getMonth() + 1 >= 4) ? `${y}-${y + 1}` : `${y - 1}-${y}`; }
@@ -427,8 +496,8 @@
 
     // --- Main UI Views ---
     function renderTopNav() {
-      const bc = state.recycleBin.length, u = state.currentUser, initials = (u?.displayName || 'AD').split(' ').map(n=>n[0]).join('').substring(0,2);
-      return `<header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs"><div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4"><div class="flex items-center gap-3"><div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-indigo-800 flex items-center justify-center text-white shadow-md shadow-indigo-200"><i class="fa-solid fa-graduation-cap text-lg"></i></div><h1 class="text-lg sm:text-xl font-extrabold text-slate-900 tracking-tight leading-tight">Attending and Non Attending Students</h1></div><div class="flex items-center gap-2 sm:gap-4"><div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${isFirebaseConfigured ? 'bg-amber-50 text-amber-800 border-amber-300' : 'bg-indigo-50 text-indigo-700 border-indigo-200'}"><i class="fa-solid ${isFirebaseConfigured ? 'fa-fire text-amber-500' : 'fa-database text-indigo-500'}"></i><span class="hidden sm:inline">${isFirebaseConfigured ? 'Firebase Live' : 'Local Storage Mode'}</span></div><div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${state.isOnline ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}"><span class="w-2 h-2 rounded-full ${state.isOnline ? 'bg-emerald-500 animate-pulse-subtle' : 'bg-amber-500'}"></span><span class="hidden sm:inline">${state.isOnline ? 'Online Synced' : 'Offline Mode'}</span></div><button onclick="state.activeModal='recycleBin';render();" class="relative inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${bc > 0 ? 'bg-rose-50 text-rose-700 border-rose-300 hover:bg-rose-100' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}"><i class="fa-solid fa-trash-can"></i><span class="hidden md:inline">Recycle Bin</span><span class="ml-0.5 px-1.5 py-0.2 rounded-full text-[10px] font-bold ${bc > 0 ? 'bg-rose-600 text-white' : 'bg-slate-200 text-slate-700'}">${bc}</span></button><div class="hidden lg:block text-left"><p class="text-xs font-bold text-slate-800 leading-tight">${escapeHtml(u?.displayName || 'Administrator')}</p><p class="text-[10px] text-slate-500">${escapeHtml(u?.role || 'Accountant')}</p></div><button onclick="handleLogout()" title="Sign Out" class="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors"><i class="fa-solid fa-right-from-bracket text-sm"></i></button></div></div></div></header>`;
+      const bc = state.recycleBin.length, u = state.currentUser;
+      return `<header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs"><div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4"><div class="flex items-center gap-3"><div class="w-10 h-10 rounded-xl overflow-hidden shadow-md border border-slate-700/40 shrink-0"><img src="${BRAND_PROFILE_LOGO}" alt="NEPS Profile Logo" class="w-full h-full object-cover" /></div><h1 class="text-lg sm:text-xl font-extrabold text-slate-900 tracking-tight leading-tight">Attending and Non Attending Students</h1></div><div class="flex items-center gap-2 sm:gap-4"><div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${isFirebaseConfigured ? 'bg-amber-50 text-amber-800 border-amber-300' : 'bg-indigo-50 text-indigo-700 border-indigo-200'}"><i class="fa-solid ${isFirebaseConfigured ? 'fa-fire text-amber-500' : 'fa-database text-indigo-500'}"></i><span class="hidden sm:inline">${isFirebaseConfigured ? 'Firebase Live' : 'Local Storage Mode'}</span></div><div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${state.isOnline ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}"><span class="w-2 h-2 rounded-full ${state.isOnline ? 'bg-emerald-500 animate-pulse-subtle' : 'bg-amber-500'}"></span><span class="hidden sm:inline">${state.isOnline ? 'Online Synced' : 'Offline Mode'}</span></div><button onclick="state.activeModal='recycleBin';render();" class="relative inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${bc > 0 ? 'bg-rose-50 text-rose-700 border-rose-300 hover:bg-rose-100' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}"><i class="fa-solid fa-trash-can"></i><span class="hidden md:inline">Recycle Bin</span><span class="ml-0.5 px-1.5 py-0.2 rounded-full text-[10px] font-bold ${bc > 0 ? 'bg-rose-600 text-white' : 'bg-slate-200 text-slate-700'}">${bc}</span></button><div class="flex items-center gap-2 border-l border-slate-200 pl-3"><div class="w-9 h-9 rounded-full overflow-hidden border-2 border-indigo-400/60 shadow-xs ring-1 ring-slate-900/10 shrink-0"><img src="${BRAND_PROFILE_LOGO}" alt="NEPS Profile Pic" class="w-full h-full object-cover" /></div><div class="hidden lg:block text-left"><p class="text-xs font-bold text-slate-800 leading-tight">${escapeHtml(u?.displayName || 'Administrator')}</p><p class="text-[10px] text-slate-500">${escapeHtml(u?.role || 'Accountant')}</p></div><button onclick="handleLogout()" title="Sign Out" class="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors"><i class="fa-solid fa-right-from-bracket text-sm"></i></button></div></div></div></header>`;
     }
 
     function renderKPIStats() {
@@ -821,15 +890,76 @@
     }
 
     function renderLoginScreen() {
-      return `<div class="min-h-screen bg-slate-100 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
-        <div class="sm:mx-auto sm:w-full sm:max-w-md"><div class="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-800 flex items-center justify-center text-white text-2xl shadow-lg shadow-indigo-200 mx-auto"><i class="fa-solid fa-graduation-cap"></i></div><h2 class="mt-4 text-center text-2xl font-extrabold text-slate-900 tracking-tight">Attending and Non Attending Students</h2><p class="mt-1 text-center text-xs font-semibold uppercase tracking-wider text-indigo-700">Portal Login</p></div>
-        <div class="mt-6 sm:mx-auto sm:w-full sm:max-w-md px-4 sm:px-0"><div class="bg-white py-8 px-6 sm:px-10 shadow-xl rounded-2xl border border-slate-200/80 space-y-5">
-          <form onsubmit="handleLoginSubmit(event)" class="space-y-4">
-            <div><label class="block text-xs font-bold text-slate-700 uppercase mb-1">Accountant Email ID</label><input type="email" id="login-email" required value="accountant@apexacademy.edu" class="w-full px-3 py-2.5 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600" /></div>
-            <div><label class="block text-xs font-bold text-slate-700 uppercase mb-1">Password</label><input type="password" id="login-password" required value="admin123" class="w-full px-3 py-2.5 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-600" /></div>
-            <button type="submit" class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-md shadow-indigo-200 transition-all cursor-pointer">Sign In to Workspace &rarr;</button>
-          </form>
-        </div></div>
+      return `<div class="min-h-screen bg-slate-900 flex flex-col justify-center py-10 sm:px-6 lg:px-8 relative overflow-hidden">
+        <!-- Ambient decorative background glow -->
+        <div class="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none"></div>
+        <div class="absolute bottom-10 right-10 w-80 h-80 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none"></div>
+
+        <div class="sm:mx-auto sm:w-full sm:max-w-md text-center z-10 px-4">
+          <!-- Profile Pic with NEPS Logo Badge -->
+          <div class="relative inline-block mx-auto">
+            <div class="w-24 h-24 rounded-full p-1 bg-gradient-to-tr from-cyan-400 via-sky-500 to-indigo-600 shadow-2xl shadow-cyan-500/25 mx-auto">
+              <div class="w-full h-full rounded-full overflow-hidden bg-[#070c1e] border-2 border-[#00f2fe]/40">
+                <img src="${BRAND_PROFILE_LOGO}" alt="NEPS Profile Pic" class="w-full h-full object-cover transform hover:scale-105 transition-transform duration-300" />
+              </div>
+            </div>
+            <span class="absolute bottom-1 right-2 w-4 h-4 rounded-full bg-emerald-500 border-2 border-slate-900" title="System Online"></span>
+          </div>
+
+          <h2 class="mt-4 text-center text-2xl sm:text-3xl font-extrabold text-white tracking-tight">Attending and Non Attending Students</h2>
+          <div class="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 shadow-xs">
+            <i class="fa-solid fa-shield-halved text-cyan-400"></i>
+            <span>Portal Administrator Sign In</span>
+          </div>
+        </div>
+
+        <div class="mt-6 sm:mx-auto sm:w-full sm:max-w-md px-4 sm:px-0 z-10">
+          <div class="bg-slate-800/90 backdrop-blur-md py-8 px-6 sm:px-10 shadow-2xl rounded-2xl border border-slate-700/80 space-y-5">
+            <!-- Access security badge -->
+            <div class="flex items-start gap-2.5 p-3 rounded-xl bg-slate-900/80 border border-slate-700/80 text-xs text-slate-300">
+              <i class="fa-solid fa-lock text-cyan-400 shrink-0 mt-0.5"></i>
+              <div class="leading-relaxed">
+                <p class="font-bold text-white">Single Admin Restricted Portal</p>
+                <p class="text-[11px] text-slate-400">Exclusively authorized for: <span class="text-cyan-300 font-mono font-medium">${PORTAL_ADMIN_EMAIL}</span></p>
+              </div>
+            </div>
+
+            <!-- Error message container (displayed when unauthorized user attempts login) -->
+            <div id="login-error-message" class="hidden"></div>
+
+            <form onsubmit="handleLoginSubmit(event)" class="space-y-4">
+              <div>
+                <label class="block text-xs font-bold text-slate-300 uppercase mb-1">Admin Email ID</label>
+                <div class="relative">
+                  <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
+                    <i class="fa-solid fa-envelope text-xs"></i>
+                  </div>
+                  <input type="email" id="login-email" required value="${PORTAL_ADMIN_EMAIL}" placeholder="${PORTAL_ADMIN_EMAIL}" class="w-full pl-9 pr-3 py-2.5 text-xs bg-slate-900 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:bg-slate-900 focus:ring-2 focus:ring-cyan-400 focus:border-cyan-400 transition-colors" />
+                </div>
+              </div>
+              <div>
+                <label class="block text-xs font-bold text-slate-300 uppercase mb-1">Admin Password</label>
+                <div class="relative">
+                  <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
+                    <i class="fa-solid fa-lock text-xs"></i>
+                  </div>
+                  <input type="password" id="login-password" required value="admin123" placeholder="••••••••" class="w-full pl-9 pr-3 py-2.5 text-xs bg-slate-900 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:bg-slate-900 focus:ring-2 focus:ring-cyan-400 focus:border-cyan-400 transition-colors" />
+                </div>
+              </div>
+              <button type="submit" class="w-full py-2.5 bg-gradient-to-r from-cyan-500 to-sky-600 hover:from-cyan-400 hover:to-sky-500 text-slate-950 font-extrabold text-xs rounded-xl shadow-lg shadow-cyan-500/25 transition-all cursor-pointer flex items-center justify-center gap-2">
+                <span>Sign In as Administrator</span>
+                <i class="fa-solid fa-arrow-right text-xs"></i>
+              </button>
+            </form>
+
+            <div class="pt-3 border-t border-slate-700/60 text-center">
+              <p class="text-[11px] text-slate-400 leading-normal">
+                <i class="fa-solid fa-shield-cat text-amber-400 mr-1"></i>
+                Sign-up is permanently disabled. Only the designated administrator is permitted. All other login attempts are blocked.
+              </p>
+            </div>
+          </div>
+        </div>
       </div>`;
     }
 
@@ -852,10 +982,29 @@
     // --- Controllers & Handlers ---
     async function handleLoginSubmit(e) {
       e.preventDefault();
+      const errBox = document.getElementById('login-error-message');
+      if (errBox) { errBox.classList.add('hidden'); errBox.innerHTML = ''; }
+      const email = (document.getElementById('login-email')?.value || '').trim();
+      const pass = document.getElementById('login-password')?.value || '';
       try {
-        const u = await mockFirebaseAuthService.signIn(document.getElementById('login-email').value, document.getElementById('login-password').value);
-        state.currentUser = u; state.isLoggedIn = true; showToast('Welcome Back', `Signed in as ${u.displayName}`, 'success'); render();
-      } catch (err) { showToast('Login Failed', err.message, 'error'); }
+        const u = await mockFirebaseAuthService.signIn(email, pass);
+        state.currentUser = u; state.isLoggedIn = true;
+        showToast('Welcome Back, Admin', `Signed in as ${u.displayName}`, 'success');
+        render();
+      } catch (err) {
+        if (errBox) {
+          errBox.classList.remove('hidden');
+          errBox.innerHTML = `
+            <div class="p-3.5 rounded-xl bg-rose-500/20 border border-rose-500/50 text-rose-200 text-xs flex items-start gap-2.5 shadow-md">
+              <i class="fa-solid fa-triangle-exclamation text-rose-400 mt-0.5 text-sm shrink-0"></i>
+              <div>
+                <p class="font-bold text-rose-300">Access Denied</p>
+                <p class="mt-0.5 opacity-90 leading-relaxed">${escapeHtml(err.message)}</p>
+              </div>
+            </div>`;
+        }
+        showToast('Access Denied', err.message, 'error');
+      }
     }
 
     async function handleLogout() {
@@ -1064,18 +1213,41 @@
       if (isFirebaseConfigured && fbAuth) {
         fbAuth.onAuthStateChanged(async user => {
           if (user) {
+            if (!isAuthorizedAdmin(user.email)) {
+              console.warn("Unauthorized user attempted access:", user.email);
+              await fbAuth.signOut();
+              localStorage.removeItem('attendance_auth_user_v1');
+              state.currentUser = null;
+              state.isLoggedIn = false;
+              showToast('Access Denied', `Account "${user.email}" is not authorized. Only ${PORTAL_ADMIN_EMAIL} has access.`, 'error');
+              render();
+              return;
+            }
             state.isLoggedIn = true;
             state.currentUser = {
               uid: user.uid,
               email: user.email,
-              displayName: user.displayName || (user.email ? user.email.split('@')[0] : 'Administrator'),
-              role: 'Head Accountant & Registrar'
+              displayName: user.displayName || 'Vinayak Mishra',
+              role: 'Portal Administrator & Head Registrar'
             };
             localStorage.setItem('attendance_auth_user_v1', JSON.stringify(state.currentUser));
           } else {
             const s = localStorage.getItem('attendance_auth_user_v1');
-            if (s) { try { state.currentUser = JSON.parse(s); state.isLoggedIn = true; } catch(e){} }
-            else { state.isLoggedIn = false; }
+            if (s) {
+              try {
+                const u = JSON.parse(s);
+                if (isAuthorizedAdmin(u.email)) {
+                  state.currentUser = u;
+                  state.isLoggedIn = true;
+                } else {
+                  localStorage.removeItem('attendance_auth_user_v1');
+                  state.currentUser = null;
+                  state.isLoggedIn = false;
+                }
+              } catch(e) { state.isLoggedIn = false; }
+            } else {
+              state.isLoggedIn = false;
+            }
           }
           state.students = await firestoreService.fetchStudents();
           state.recycleBin = await firestoreService.fetchRecycleBin();
@@ -1084,7 +1256,24 @@
       } else {
         state.students = await firestoreService.fetchStudents();
         state.recycleBin = await firestoreService.fetchRecycleBin();
-        state.currentUser = firebaseAuthService.getCurrentUser();
+        const s = localStorage.getItem('attendance_auth_user_v1');
+        if (s) {
+          try {
+            const u = JSON.parse(s);
+            if (isAuthorizedAdmin(u.email)) {
+              state.currentUser = u;
+              state.isLoggedIn = true;
+            } else {
+              localStorage.removeItem('attendance_auth_user_v1');
+              state.currentUser = null;
+              state.isLoggedIn = false;
+            }
+          } catch(e) { state.isLoggedIn = false; }
+        } else {
+          // Default session for the single authorized admin
+          state.currentUser = firebaseAuthService.getCurrentUser();
+          state.isLoggedIn = true;
+        }
         render();
       }
     }
